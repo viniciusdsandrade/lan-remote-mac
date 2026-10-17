@@ -1,0 +1,7 @@
+.DS_Store
+__pycache__/
+*.pyc
+# Binários e bundle gerados por mac_app/build_app.sh
+*.app/
+mac_app/Controle Remoto LG
+mac_app/lg_remote_bin

@@ -1,0 +1,3 @@
+# lg_roap_control.py usa so a biblioteca padrao do Python.
+# "requests" e opcional (se presente, e usado no lugar do urllib).
+requests>=2.31
