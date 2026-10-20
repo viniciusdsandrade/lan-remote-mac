@@ -124,6 +124,13 @@ final class LGTVClient: ObservableObject {
     var activePairing: AndroidTVPairing?
     var pairingCandidate: AndroidTVBox?
 
+    // The PS5 that switches the TV on when the box doesn't answer (see PlayStationLink.swift)
+    @Published var console: PlayStationConsole? = PlayStationConsole.load()
+    @Published var consolePairingStage: ConsolePairingStage = .idle
+    @Published var discoveredConsoles: [DiscoveredPlayStation] = []
+    @Published var psnAccountId: String?
+    @Published var psnStage: ConsolePairingStage = .idle
+
     var isConnected: Bool { powerState == .on }
 
     private var pollTimer: Timer?

@@ -8,6 +8,10 @@ struct SettingsView: View {
     @State private var portInput: String = "8080"
     @State private var pairingKeyInput: String = ""
     @State private var boxCodeInput: String = ""
+    @State private var psnInput: String = ""
+    @State private var consolePinInput: String = ""
+    @State private var selectedConsoleId: String?
+    @State private var showPSNLogin: Bool = false
     @State private var alertTitle: String = ""
     @State private var alertMessage: String = ""
     @State private var showAlert: Bool = false
@@ -35,14 +39,14 @@ struct SettingsView: View {
 
             ScrollView {
                 VStack(spacing: 16) {
-                    boxSection
+                    powerSection
                     networkSection
                     pairingSection
                 }
                 .padding(20)
             }
         }
-        .frame(width: 420, height: 640)
+        .frame(width: 420, height: 700)
         .background(Color(white: 0.11))
         .onAppear {
             hostInput = client.config.host
@@ -51,33 +55,53 @@ struct SettingsView: View {
             if client.box?.paired != true && client.discoveredBoxes.isEmpty {
                 client.searchBoxes()
             }
+            if client.console?.registered != true && client.discoveredConsoles.isEmpty {
+                client.searchConsoles()
+            }
         }
         .alert(isPresented: $showAlert) {
             Alert(title: Text(alertTitle), message: Text(alertMessage), dismissButton: .default(Text("OK")))
         }
+        .sheet(isPresented: $showPSNLogin) {
+            PSNLoginSheet { redirect in
+                psnInput = ""
+                client.usePSNAccount(redirect)
+            }
+        }
     }
 
-    // MARK: - Turning the TV on through the TV Box
+    // MARK: - Turning the TV on through the TV Box or the PS5
 
-    private var boxSection: some View {
+    private var powerSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle("Ligar a TV pelo app")
 
-            Text("Em standby esta TV desliga a rede, então nenhum comando chega até ela. O app pede para a TV Box ligada no HDMI ligar a TV pelo SIMPLINK (HDMI-CEC). Basta parear uma vez.")
+            Text("Em standby esta TV desliga a rede, então nenhum comando chega até ela. O app pede a um aparelho ligado no HDMI que a ligue pelo SIMPLINK (HDMI-CEC): a TV Box e, como reserva, o PS5 (a TV Box pode sair do Wi-Fi depois de horas parada). Com o PS5, o app só garante que ele acorda; se a TV acende junto ainda está em teste. Basta configurar uma vez.")
                 .font(.caption)
                 .foregroundColor(Color(white: 0.7))
                 .fixedSize(horizontal: false, vertical: true)
 
+            if client.canTurnOnTV && client.powerState == .off {
+                Button(action: client.turnOn) {
+                    Label("Ligar a TV agora", systemImage: "power")
+                }
+                .buttonStyle(RemoteButtonStyle(bg: Color(red: 0.13, green: 0.55, blue: 0.27), height: 34))
+            }
+
+            deviceTitle("TV Box (Android TV)", symbol: "tv.and.mediabox")
             if let box = client.box, box.paired {
                 pairedRow(name: box.name, detail: "Pareada · \(box.host)", forget: client.forgetBox)
-                if client.powerState == .off {
-                    Button(action: client.turnOn) {
-                        Label("Ligar a TV agora", systemImage: "power")
-                    }
-                    .buttonStyle(RemoteButtonStyle(bg: Color(red: 0.13, green: 0.55, blue: 0.27), height: 34))
-                }
             } else {
                 boxPairingSteps
+            }
+
+            Divider().background(Color(white: 0.3))
+
+            deviceTitle("PlayStation 5", symbol: "gamecontroller")
+            if let console = client.console, console.registered {
+                pairedRow(name: console.name, detail: "Registrado · \(console.host)", forget: client.forgetConsole)
+            } else {
+                consoleSetupSteps
             }
 
             requirements
@@ -85,6 +109,16 @@ struct SettingsView: View {
         .padding(14)
         .background(Color(white: 0.15))
         .cornerRadius(12)
+    }
+
+    private func deviceTitle(_ text: String, symbol: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol)
+                .font(.system(size: 12))
+            Text(text)
+                .font(.system(size: 12, weight: .semibold))
+        }
+        .foregroundColor(Color(white: 0.85))
     }
 
     private func pairedRow(name: String, detail: String, forget: @escaping () -> Void) -> some View {
@@ -106,6 +140,127 @@ struct SettingsView: View {
                 .frame(width: 84)
         }
     }
+
+    // MARK: PS5 registration (once)
+
+    @ViewBuilder
+    private var consoleSetupSteps: some View {
+        switch client.consolePairingStage {
+        case .searching:
+            progressRow("Procurando PS5 na rede…")
+        case .working:
+            progressRow("Registrando no PS5…")
+        case .failed(let message):
+            Text(message)
+                .font(.caption)
+                .foregroundColor(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            consoleCandidates
+        case .idle:
+            consoleCandidates
+        }
+    }
+
+    /// The console chosen in the list; with one console found there is nothing to choose.
+    private var selectedConsole: DiscoveredPlayStation? {
+        client.discoveredConsoles.first { $0.id == selectedConsoleId }
+            ?? (client.discoveredConsoles.count == 1 ? client.discoveredConsoles.first : nil)
+    }
+
+    @ViewBuilder
+    private var consoleCandidates: some View {
+        if client.discoveredConsoles.isEmpty {
+            Text("Nenhum PS5 encontrado. Ele precisa estar na tomada e na mesma rede do Mac, ligado ou em repouso com 'Permanecer conectado à internet'.")
+                .font(.caption)
+                .foregroundColor(Color(white: 0.75))
+                .fixedSize(horizontal: false, vertical: true)
+            Button(action: client.searchConsoles) {
+                Label("Procurar PS5", systemImage: "magnifyingglass")
+            }
+            .buttonStyle(RemoteButtonStyle(bg: Color(white: 0.22), height: 30))
+        } else {
+            ForEach(client.discoveredConsoles) { candidate in
+                HStack(spacing: 10) {
+                    Image(systemName: selectedConsole?.id == candidate.id ? "largecircle.fill.circle" : "circle")
+                        .font(.system(size: 14))
+                        .foregroundColor(Color(red: 0.4, green: 0.7, blue: 1.0))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(candidate.console.name)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.white)
+                        Text("\(candidate.console.host) · \(candidate.awake ? "Ligado" : "Em repouso")")
+                            .font(.caption)
+                            .foregroundColor(Color(white: 0.6))
+                    }
+                    Spacer()
+                }
+                .padding(10)
+                .background(Color(white: 0.19))
+                .cornerRadius(10)
+                .contentShape(Rectangle())
+                .onTapGesture { selectedConsoleId = candidate.id }
+            }
+
+            stepText(1, "Conta PSN: clique em Entrar na PSN e faça o login na janela que abre, com a conta que você usa no PS5. O app pega o id da conta sozinho; não há nada para procurar nem copiar.")
+            HStack(spacing: 8) {
+                Button("Entrar na PSN") { showPSNLogin = true }
+                    .buttonStyle(RemoteButtonStyle(bg: Color(red: 0.2, green: 0.4, blue: 0.65), height: 28, cornerRadius: 6))
+                    .frame(width: 110)
+                    .disabled(client.psnStage == .working)
+                TextField("ou cole o id da conta, se já o tiver", text: $psnInput)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .onSubmit(usePSNAccount)
+                Button("Usar", action: usePSNAccount)
+                    .buttonStyle(RemoteButtonStyle(bg: Color(white: 0.25), height: 28, cornerRadius: 6))
+                    .frame(width: 56)
+                    .disabled(psnInput.trimmingCharacters(in: .whitespaces).isEmpty || client.psnStage == .working)
+            }
+            switch client.psnStage {
+            case .working:
+                progressRow("Conferindo a conta na PSN…")
+            case .failed(let message):
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            default:
+                if client.psnAccountId != nil {
+                    Label("Conta PSN pronta.", systemImage: "checkmark.circle")
+                        .font(.caption)
+                        .foregroundColor(.green)
+                }
+            }
+
+            stepText(2, "No PS5 ligado, com a TV na entrada dele: Configurações › Sistema › Reprodução Remota › Vincular dispositivo. Digite o PIN de 8 números que aparece:")
+            HStack(spacing: 8) {
+                TextField("00000000", text: $consolePinInput)
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    .onChange(of: consolePinInput) { value in
+                        let cleaned = String(value.filter(\.isNumber).prefix(8))
+                        if cleaned != value { consolePinInput = cleaned }
+                    }
+                    .onSubmit(registerConsole)
+                Button("Registrar", action: registerConsole)
+                    .buttonStyle(RemoteButtonStyle(bg: Color(red: 0.15, green: 0.55, blue: 0.25), height: 30, cornerRadius: 6))
+                    .frame(width: 110)
+                    .disabled(consolePinInput.count != 8 || client.psnAccountId == nil || selectedConsole == nil)
+            }
+        }
+    }
+
+    private func usePSNAccount() {
+        let input = psnInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !input.isEmpty else { return }
+        client.usePSNAccount(input)
+    }
+
+    private func registerConsole() {
+        guard consolePinInput.count == 8, let candidate = selectedConsole else { return }
+        client.registerConsole(candidate, pin: consolePinInput)
+    }
+
+    // MARK: TV Box pairing (once)
 
     @ViewBuilder
     private var boxPairingSteps: some View {
@@ -206,6 +361,8 @@ struct SettingsView: View {
             Text("• Na TV LG: SIMPLINK ligado (Configurações › Opções › SIMPLINK, ou o botão SIMPLINK do app).")
             Text("• Na TV Box (HDMI-CEC): Configurações › Tela e som (ou Sistema › Entradas) › HDMI-CEC ativado, e 'Desligar automaticamente' desativado.")
             Text("• Na TV Box (Energia): Configurações › Sistema › Energia e alimentação › Modo de energia em 'Consumo elevado (Sempre conectado)' e timer de desligamento em 'Nunca'.")
+            Text("• No PS5 (HDMI): Configurações › Sistema › HDMI › 'Ativar Link de dispositivo HDMI'.")
+            Text("• No PS5 (repouso): Configurações › Sistema › Economia de energia › Recursos disponíveis no modo de repouso › 'Permanecer conectado à internet' e 'Ativar ligar o PS5 pela rede'.")
         }
         .font(.caption)
         .foregroundColor(Color(white: 0.6))

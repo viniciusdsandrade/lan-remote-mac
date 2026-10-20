@@ -15,6 +15,9 @@ swiftc -parse-as-library -O \
   "$SCRIPT_DIR/LGTVClient.swift" \
   "$SCRIPT_DIR/AndroidTVRemote.swift" \
   "$SCRIPT_DIR/TVBoxLink.swift" \
+  "$SCRIPT_DIR/PlayStationRemote.swift" \
+  "$SCRIPT_DIR/PlayStationLink.swift" \
+  "$SCRIPT_DIR/PSNLoginView.swift" \
   "$SCRIPT_DIR/RemoteHelp.swift" \
   "$SCRIPT_DIR/RemoteComponents.swift" \
   "$SCRIPT_DIR/SettingsView.swift" \

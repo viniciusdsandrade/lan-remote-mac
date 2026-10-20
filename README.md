@@ -186,7 +186,8 @@ Para ter um controle remoto virtual nativo no macOS que parece um controle físi
 
 2. **Destaques do App Nativo (SwiftUI / Apple Silicon)**:
    - **Liga a TV sem levantar**: com a TV em standby, o botão **Ligar** acorda a TV Box (Android TV)
-     ligada no HDMI, e ela liga a TV pelo HDMI-CEC. Detalhes em "Ligar a TV pelo app" abaixo.
+     ligada no HDMI, que liga a TV pelo HDMI-CEC, ou o PS5 se ela não responder (com o PS5 a TV
+     ligar junto ainda não foi confirmada). Detalhes em "Ligar a TV pelo app" abaixo.
    - **Botões que se explicam**: cada botão tem ícone e nome em português, agrupados por função
      (Navegação, Volume e canal, Recursos da TV, Reprodução, Botões coloridos). Passar o mouse mostra
      no rodapé o que o botão faz e o atalho de teclado; o **?** do topo abre o **Guia dos botões**.
@@ -255,6 +256,42 @@ O pareamento fica em `~/.config/lg_roap_control/androidtv.json` (nome, IP e MAC 
 certificado do app em `~/.config/lg_roap_control/androidtv/client.p12`, com a senha dele, gerada ao
 acaso na criação, em `client.pass` ao lado (ambos com permissão `0600`). Não usar `KEYCODE_TV_POWER`
 (177) nem `KEYCODE_WAKEUP` (224): essa TV Box ignora os dois.
+
+#### Reserva: o PS5
+
+Depois de horas em standby a TV Box sai do Wi-Fi de vez (nem o ARP a encontra) e o Wake-on-LAN não
+chega até ela. O PS5 em repouso, com "Permanecer conectado à internet", continua respondendo na rede,
+então o botão **Ligar** usa o PS5 quando a TV Box não acorda:
+
+1. O app pergunta pelo PS5 com o protocolo de descoberta do app Remote Play (UDP 9302; em repouso ele
+   responde `620 Server Standby`) e manda um **WAKEUP** com a credencial obtida no registro.
+2. O PS5 sai do repouso. Se, ao acordar assim, ele mandar o HDMI-CEC "ligar a TV" (One-Touch Play,
+   "Reprodução com um toque" no menu do PS5) e a TV obedecer, ela liga e troca para a entrada dele.
+
+**Estado do teste (19/10/2026):** o botão **Ligar** acordou o PS5 do repouso, mas a TV **não** ligou
+junto (o app esperou 90 s). Ainda não se sabe se é a configuração do HDMI ou se o acordar pela rede
+não manda esse comando. Faltam dois testes: apertar o botão PS do DualSense com a TV desligada e o
+PS5 em repouso (se a TV acender, o problema é o acordar pela rede) e o Wake-on-LAN direto na TV.
+
+Registro, uma vez só, em Configurações → "Ligar a TV pelo app" → PlayStation 5:
+
+- **Conta PSN**: "Entrar na PSN" abre o login da Sony numa janela do próprio app (o login do app
+  Remote Play para Windows). Ao terminar, o app intercepta a página de retorno, troca o código pelo id
+  da conta (8 bytes em base64) e segue; não há nada para copiar. Quem já tem o id (do chiaki, por
+  exemplo) pode colar direto no campo ao lado.
+- **PIN**: no PS5 ligado, Configurações › Sistema › Reprodução Remota › Vincular dispositivo mostra um
+  PIN de 8 números; digite e registre. O app faz o que o Remote Play faz: busca `SRC3` na porta 9295 e
+  `POST /sie/ps5/rp/sess/rgst` com o id da conta cifrado em AES-128-CFB por uma chave derivada do PIN
+  (esquema documentado pelos projetos chiaki-ng e playactor). A resposta traz a `PS5-RegistKey`, que
+  vira a credencial do WAKEUP.
+- No PS5: Configurações › Sistema › HDMI › **Ativar Link de dispositivo HDMI** e **Reprodução com um
+  toque**; e Configurações ›
+  Sistema › Economia de energia › Recursos disponíveis no modo de repouso › **Permanecer conectado à
+  internet** e **Ativar ligar o PS5 pela rede**.
+
+O registro fica em `~/.config/lg_roap_control/playstation.json` (nome, IP, MAC, id da conta e
+credencial de wake; permissão `0600`). O PS5 fica ligado depois (não há como voltar ao repouso só com
+o protocolo de descoberta); ele volta a dormir pelo timer dele ou pelo controle.
 
 ---
 
@@ -360,7 +397,7 @@ criado com permissão `0600`. Conteúdo típico:
 
 - **Ligar a TV direto pela rede não funciona** nesse modelo: em standby a NetCast desliga o
   controlador de rede (o `wol` existe como melhor esforço e não acorda esta TV). O app de Mac
-  liga a TV pela TV Box via HDMI-CEC; veja "Ligar a TV pelo app".
+  tenta ligar a TV pela TV Box ou pelo PS5 via HDMI-CEC; veja "Ligar a TV pelo app".
 - A TV precisa estar ligada e na mesma rede. Não há acesso remoto pela internet (e nem deve
   haver: a porta 8080 não tem autenticação além do pairing).
 - Um só pairing key por TV; vários controladores podem usar o mesmo código.

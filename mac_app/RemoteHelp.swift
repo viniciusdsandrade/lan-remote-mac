@@ -19,7 +19,7 @@ enum Help {
         detail: "Coloca a TV em standby. Para ligar de novo sem levantar, use o botão Ligar do app.",
         symbol: "power")
     static let powerOn = ControlHelp(id: "power-on", label: "Ligar", title: "Ligar a TV",
-        detail: "Acorda a TV Box pelo Wi-Fi e ela liga a TV pelo HDMI (SIMPLINK). A imagem volta em segundos; o controle, em até 1 minuto.",
+        detail: "Acorda a TV Box (ou o PS5, se ela não responder) e tenta ligar a TV pelo HDMI. A imagem volta em segundos; o controle, em até 1 minuto.",
         symbol: "power")
     static let input = ControlHelp(id: "input", label: "Entrada", title: "Entrada (fonte da imagem)",
         detail: "Troca entre TV (antena/cabo), HDMI 1, HDMI 2, AV… Cada toque passa para a próxima.",
@@ -95,7 +95,7 @@ enum Help {
         detail: "Liga ou desliga o modo 3D. Só faz efeito em TVs e vídeos com 3D.",
         symbol: "cube")
     static let simplink = ControlHelp(id: "simplink", label: "SIMPLINK", title: "SIMPLINK (HDMI-CEC)",
-        detail: "Abre o menu dos aparelhos ligados no HDMI (TV Box, PS5). Deixe ativado: é por ele que o app liga a TV.",
+        detail: "Abre o menu dos aparelhos ligados no HDMI (TV Box, PS5). Deixe ativado: é por ele que esses aparelhos podem ligar a TV.",
         symbol: "link")
 
     // Playback
@@ -135,7 +135,7 @@ enum Help {
     static let guideSheet = ControlHelp(id: "guide-sheet", label: "", title: "Guia dos botões",
         detail: "Abre a lista com o que cada botão do controle faz.", symbol: "questionmark.circle")
     static let settings = ControlHelp(id: "settings", label: "", title: "Configurações do app",
-        detail: "IP da TV, pareamento e a TV Box que liga a TV pelo HDMI.", symbol: "gearshape.fill")
+        detail: "IP da TV, pareamento, e a TV Box ou o PS5 que ligam a TV pelo HDMI.", symbol: "gearshape.fill")
     static let volumeStatus = ControlHelp(id: "vol-status", label: "", title: "Volume atual",
         detail: "Volume que a TV informou agora (ou Mudo).", symbol: "speaker.wave.2.fill")
     static let inputStatus = ControlHelp(id: "input-status", label: "", title: "Entrada atual",

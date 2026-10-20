@@ -137,31 +137,71 @@ enum TVBoxDiscovery {
 // MARK: - Power on and box pairing
 
 extension LGTVClient {
-    var canTurnOnTV: Bool { box?.paired == true }
+    var canTurnOnTV: Bool { box?.paired == true || console?.registered == true }
 
-    func turnOn() {
-        guard powerState != .turningOn, let box, box.paired else { return }
-        Task { await performTurnOn(using: box) }
+    /// Who switches the TV on, for the texts: "a TV Box da sala", "o PS5-123" or both.
+    var powerOnHelpers: String? {
+        let box = box?.paired == true ? box.map { "a \($0.name)" } : nil
+        let console = console?.registered == true ? console.map { "o \($0.name)" } : nil
+        switch (box, console) {
+        case let (box?, console?): return "\(box) (ou \(console), se ela não acordar)"
+        case let (box?, nil): return box
+        case let (nil, console?): return console
+        default: return nil
+        }
     }
 
-    private func performTurnOn(using box: AndroidTVBox) async {
+    func turnOn() {
+        guard powerState != .turningOn, canTurnOnTV else { return }
+        Task { await performTurnOn() }
+    }
+
+    /// The TV Box first; the PS5 when the box doesn't wake (it drops off the Wi-Fi after hours in
+    /// standby, and then the Wake-on-LAN never reaches it).
+    private func performTurnOn() async {
         powerState = .turningOn
         powerOnError = nil
-        powerOnStep = "Acordando a \(box.name) pelo Wi-Fi…"
-        do {
-            try await wakeBox(box)
-        } catch AndroidTVError.notPaired {
-            self.box?.paired = false
-            self.box?.save()
-            failTurnOn("A TV Box não reconhece mais este Mac. Pareie de novo em Configurações.")
-            return
-        } catch {
-            failTurnOn("\(error.localizedDescription) Ela está ligada na tomada e no Wi-Fi?")
+        var problems: [String] = []
+        var helper: String?
+
+        if let box, box.paired {
+            powerOnStep = "Acordando a \(box.name) pelo Wi-Fi…"
+            do {
+                try await wakeBox(box)
+                helper = box.name
+            } catch AndroidTVError.notPaired {
+                self.box?.paired = false
+                self.box?.save()
+                problems.append("A TV Box não reconhece mais este Mac: pareie de novo em Configurações.")
+            } catch {
+                problems.append(error.localizedDescription)
+            }
+        }
+        if helper == nil, let console, console.registered {
+            powerOnStep = problems.isEmpty ? "Acordando o \(console.name) pela rede…"
+                                           : "A TV Box não acordou. Acordando o \(console.name) pela rede…"
+            do {
+                let awake = try await PlayStationDiscovery.wake(console)
+                if awake != console {   // moved to another address (DHCP)
+                    self.console = awake
+                    awake.save()
+                }
+                helper = console.name
+            } catch {
+                problems.append(error.localizedDescription)
+            }
+        }
+        guard let helper else {
+            var message = problems.joined(separator: " ")
+            if box?.paired == true, console?.registered != true {
+                message += " Ela está ligada na tomada e no Wi-Fi?"
+            }
+            failTurnOn(message)
             return
         }
 
         // The picture comes back in seconds; the NetCast network takes almost a minute more.
-        powerOnStep = "A TV está acendendo. O controle volta a responder em até 1 minuto…"
+        powerOnStep = "\(helper) está ligando a TV. O controle volta a responder em até 1 minuto…"
         let deadline = Date().addingTimeInterval(90)
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -171,8 +211,8 @@ extension LGTVClient {
                 return
             }
         }
-        failTurnOn("A TV Box recebeu o pedido, mas a TV não respondeu. Confira se o SIMPLINK está ligado na TV "
-                   + "e o controle HDMI (CEC) na TV Box.")
+        failTurnOn("\(helper) acordou, mas a TV não respondeu. Confira se o SIMPLINK está ligado na TV "
+                   + "e o controle HDMI (CEC) nesse aparelho.")
     }
 
     private func wakeBox(_ box: AndroidTVBox) async throws {

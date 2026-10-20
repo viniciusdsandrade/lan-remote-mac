@@ -72,8 +72,8 @@ struct RemoteView: View {
             Alert(
                 title: Text("Desligar a TV?"),
                 message: Text(client.canTurnOnTV
-                    ? "Para ligar de novo, use o botão Ligar do app: a TV Box liga a TV pelo HDMI."
-                    : "Esta TV não liga pela rede sozinha. Para ligar pelo app depois, configure a TV Box em Configurações."),
+                    ? "Para ligar de novo, use o botão Ligar do app: \(client.powerOnHelpers ?? "a TV Box") tenta ligar a TV pelo HDMI."
+                    : "Esta TV não liga pela rede sozinha. Para ligar pelo app depois, configure a TV Box ou o PS5 em Configurações."),
                 primaryButton: .destructive(Text("Desligar")) {
                     client.sendKey(.power)
                 },
@@ -486,9 +486,9 @@ private struct PowerBanner: View {
     private var message: String {
         if turningOn { return client.powerOnStep }
         if let error = client.powerOnError { return error }
-        if let box = client.box, box.paired {
-            return "Toque em Ligar: a \(box.name) liga a TV pelo HDMI. A imagem volta em segundos; o controle, em até 1 minuto."
+        if let helpers = client.powerOnHelpers {
+            return "Toque em Ligar: \(helpers) tenta ligar a TV pelo HDMI. A imagem volta em segundos; o controle, em até 1 minuto."
         }
-        return "Em standby esta TV desliga a rede. Dá para ligá-la pela TV Box ligada no HDMI: configure uma vez."
+        return "Em standby esta TV desliga a rede. Dá para ligá-la pela TV Box ou pelo PS5 ligados no HDMI: configure uma vez."
     }
 }
