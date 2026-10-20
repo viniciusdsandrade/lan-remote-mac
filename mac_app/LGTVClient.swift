@@ -307,7 +307,17 @@ final class LGTVClient: ObservableObject {
     }
     
     // MARK: - Status Queries
-    
+
+    /// What the TV is showing, as a JPEG (the screen_image query). Nil when the TV doesn't answer.
+    func screenImage() async -> Data? {
+        let basePath = config.protocolType == "udap" ? "/udap/api/data" : "/roap/api/data"
+        let request = createRequest(path: "\(basePath)?target=screen_image&session=\(config.session ?? "")")
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              data.starts(with: [0xFF, 0xD8]) else { return nil }
+        return data
+    }
+
     func refreshStatus() async {
         guard !isRefreshing else { return }
         isRefreshing = true

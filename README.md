@@ -249,12 +249,18 @@ Requisitos, uma vez só:
   **Modo de consumo elevado (Sempre conectado)** e timer de desligamento em **Nunca**, para a TV Box
   não desconectar do Wi-Fi após horas em espera.
 - **Parear o app com a TV Box**: Configurações → "Ligar a TV pelo app" → Parear, com a TV ligada na
-  entrada da TV Box, e digitar o código de 6 caracteres que aparece na tela.
+  entrada da TV Box. A TV Box mostra um código de 6 caracteres e o app o lê sozinho: fotografa a tela
+  da TV (consulta `screen_image`), lê o código por OCR (Vision) e confere o dígito verificador dele antes
+  de enviar, o que separa as confusões do OCR (0/D, 8/B). Se não conseguir, o campo para digitar fica
+  na tela.
 
-Testado nesta casa: TV desligada e TV Box em repouso → TV ligada e respondendo em ~42 s.
+Testado nesta casa: TV desligada e TV Box em repouso → TV ligada e respondendo em ~42 s (em
+20/10/2026: 44 a 57 s, também depois de 17 min em repouso).
 O pareamento fica em `~/.config/lg_roap_control/androidtv.json` (nome, IP e MAC da TV Box) e o
 certificado do app em `~/.config/lg_roap_control/androidtv/client.p12`, com a senha dele, gerada ao
-acaso na criação, em `client.pass` ao lado (ambos com permissão `0600`). Não usar `KEYCODE_TV_POWER`
+acaso na criação, em `client.pass` ao lado (ambos com permissão `0600`). O certificado vale 20 anos e
+o pareamento dura o mesmo, desde que os **dois** arquivos fiquem: sem um deles, o app cria outro
+certificado, que a TV Box não conhece, e é preciso parear de novo. Não usar `KEYCODE_TV_POWER`
 (177) nem `KEYCODE_WAKEUP` (224): essa TV Box ignora os dois.
 
 #### Reserva: o PS5

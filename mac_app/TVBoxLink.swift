@@ -282,7 +282,7 @@ extension LGTVClient {
         }
     }
 
-    /// Makes the box show a 6-character code on the TV screen.
+    /// Makes the box show a 6-character code on the TV screen, then tries to read it from there.
     func requestBoxCode(for candidate: AndroidTVBox) {
         activePairing?.cancel()
         boxCodeError = nil
@@ -294,8 +294,24 @@ extension LGTVClient {
                 activePairing = pairing
                 pairingCandidate = candidate
                 boxPairingStage = .waitingForCode
+                await readBoxCode(of: pairing)
             } catch {
                 boxPairingStage = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// The code is on the TV, which the app can photograph (screen_image): reads it with OCR so
+    /// nobody has to type it. The code's own check digit sorts out OCR mix-ups before anything is
+    /// sent; when no reading passes, the field for typing it stays on screen.
+    private func readBoxCode(of pairing: AndroidTVPairing) async {
+        for _ in 1...5 {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard activePairing === pairing, boxPairingStage == .waitingForCode else { return }
+            guard let image = await screenImage() else { continue }
+            if let code = ScreenText(data: image).hexCodes().first(where: pairing.accepts) {
+                confirmBoxCode(code)
+                return
             }
         }
     }

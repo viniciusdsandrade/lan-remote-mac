@@ -1,6 +1,4 @@
 import Foundation
-import ImageIO
-import Vision
 
 // Woken over the network, the PS5 turns on but leaves the TV off: it sends One-Touch Play (the
 // HDMI-CEC "turn the TV on") only when it boots or when a physical controller connects. The one
@@ -141,39 +139,6 @@ enum PlayStationRestart {
                     throw PlayStationError.restartFailed(reason ?? "o ps5ctl terminou com \(process.terminationStatus)")
                 }
             }.value
-        }
-    }
-
-    /// What OCR reads on a screenshot of the console.
-    struct ScreenText {
-        let lines: [String]
-
-        init(lines: [String]) {
-            self.lines = lines
-        }
-
-        init(image: URL) {
-            guard let source = CGImageSourceCreateWithURL(image as CFURL, nil),
-                  let picture = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-                self.lines = []
-                return
-            }
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.recognitionLanguages = ["pt-BR", "en-US"]
-            request.usesLanguageCorrection = false
-            try? VNImageRequestHandler(cgImage: picture).perform([request])
-            self.lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string.lowercased() }
-        }
-
-        /// Some line is exactly one of `words` (a focused icon's caption sits alone on its line).
-        func hasLine(_ words: [String]) -> Bool {
-            lines.contains { line in words.contains(line.trimmingCharacters(in: .whitespaces)) }
-        }
-
-        func contains(_ fragments: [String]) -> Bool {
-            let text = lines.joined(separator: " ")
-            return fragments.contains { text.contains($0) }
         }
     }
 }

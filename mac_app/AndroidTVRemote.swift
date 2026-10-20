@@ -329,7 +329,8 @@ enum AndroidTVIdentity {
             try? FileManager.default.removeItem(at: key)
             try? FileManager.default.removeItem(at: cert)
         }
-        try openssl(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256", "-days", "3650",
+        // The pairing lasts as long as this certificate: 20 years (still a UTCTime, before 2050).
+        try openssl(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256", "-days", "7300",
                      "-subj", "/CN=atvremote/O=Controle Remoto LG", "-keyout", key.path, "-out", cert.path])
         // The passphrase goes through the environment, not the command line (visible in `ps`).
         try openssl(["pkcs12", "-export", "-inkey", key.path, "-in", cert.path, "-out", bundleURL.path,
@@ -448,7 +449,19 @@ final class AndroidTVPairing {
         try await expect(31)                                // configuration_ack: code is on screen now
     }
 
+    /// Whether `code` passes its own check digit, without sending anything to the box.
+    func accepts(_ code: String) -> Bool {
+        (try? secret(for: code)) != nil
+    }
+
     func finish(code rawCode: String) async throws {
+        let secret = try secret(for: rawCode)
+        try await send { $0.message(40) { $0.bytes(1, secret) } }   // pairing_secret
+        try await expect(41)                                         // secret_ack
+        cancel()
+    }
+
+    private func secret(for rawCode: String) throws -> Data {
         let code = rawCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard code.count == 6, let checksum = UInt8(code.prefix(2), radix: 16),
               let nonce = Data(hex: String(code.suffix(4))) else { throw AndroidTVError.wrongCode }
@@ -464,9 +477,7 @@ final class AndroidTVPairing {
         let secret = Data(hash.finalize())
         // The first byte of the code is a checksum of the rest: catches typos before the box does.
         guard secret.first == checksum else { throw AndroidTVError.wrongCode }
-        try await send { $0.message(40) { $0.bytes(1, secret) } }   // pairing_secret
-        try await expect(41)                                         // secret_ack
-        cancel()
+        return secret
     }
 
     func cancel() {
