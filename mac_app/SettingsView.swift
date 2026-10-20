@@ -76,7 +76,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 12) {
             sectionTitle("Ligar a TV pelo app")
 
-            Text("Em standby esta TV desliga a rede, então nenhum comando chega até ela. O app pede a um aparelho ligado no HDMI que a ligue pelo SIMPLINK (HDMI-CEC): a TV Box e, como reserva, o PS5 (a TV Box pode sair do Wi-Fi depois de horas parada). Com o PS5, o app só garante que ele acorda; se a TV acende junto ainda está em teste. Basta configurar uma vez.")
+            Text("Em standby esta TV desliga a rede, então nenhum comando chega até ela. O app pede a um aparelho ligado no HDMI que a ligue pelo SIMPLINK (HDMI-CEC): a TV Box e, como reserva, o PS5 (a TV Box pode sair do Wi-Fi depois de horas parada). Acordado pela rede, o PS5 não liga a TV, então o app o reinicia pelo Uso remoto e ele liga a TV ao voltar (leva cerca de 2 minutos e fecha jogos suspensos). Basta configurar uma vez.")
                 .font(.caption)
                 .foregroundColor(Color(white: 0.7))
                 .fixedSize(horizontal: false, vertical: true)
@@ -363,6 +363,7 @@ struct SettingsView: View {
             Text("• Na TV Box (Energia): Configurações › Sistema › Energia e alimentação › Modo de energia em 'Consumo elevado (Sempre conectado)' e timer de desligamento em 'Nunca'.")
             Text("• No PS5 (HDMI): Configurações › Sistema › HDMI › 'Ativar Link de dispositivo HDMI'.")
             Text("• No PS5 (repouso): Configurações › Sistema › Economia de energia › Recursos disponíveis no modo de repouso › 'Permanecer conectado à internet' e 'Ativar ligar o PS5 pela rede'.")
+            Text("• Para o reinício do PS5: o ps5ctl do projeto Controle PS5, pareado com o console, em ~/.local/bin/ps5ctl (ou na variável PS5CTL), e o ffmpeg.")
         }
         .font(.caption)
         .foregroundColor(Color(white: 0.6))

@@ -19,7 +19,7 @@ enum Help {
         detail: "Coloca a TV em standby. Para ligar de novo sem levantar, use o botão Ligar do app.",
         symbol: "power")
     static let powerOn = ControlHelp(id: "power-on", label: "Ligar", title: "Ligar a TV",
-        detail: "Acorda a TV Box (ou o PS5, se ela não responder) e tenta ligar a TV pelo HDMI. A imagem volta em segundos; o controle, em até 1 minuto.",
+        detail: "Acorda a TV Box (ou o PS5, se ela não responder) e liga a TV pelo HDMI. Pela TV Box, a imagem volta em segundos e o controle em até 1 minuto; pelo PS5, que precisa reiniciar, em cerca de 2 minutos.",
         symbol: "power")
     static let input = ControlHelp(id: "input", label: "Entrada", title: "Entrada (fonte da imagem)",
         detail: "Troca entre TV (antena/cabo), HDMI 1, HDMI 2, AV… Cada toque passa para a próxima.",

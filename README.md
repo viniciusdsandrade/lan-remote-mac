@@ -186,8 +186,8 @@ Para ter um controle remoto virtual nativo no macOS que parece um controle físi
 
 2. **Destaques do App Nativo (SwiftUI / Apple Silicon)**:
    - **Liga a TV sem levantar**: com a TV em standby, o botão **Ligar** acorda a TV Box (Android TV)
-     ligada no HDMI, que liga a TV pelo HDMI-CEC, ou o PS5 se ela não responder (com o PS5 a TV
-     ligar junto ainda não foi confirmada). Detalhes em "Ligar a TV pelo app" abaixo.
+     ligada no HDMI, que liga a TV pelo HDMI-CEC, ou, se ela não responder, acorda e reinicia o PS5,
+     que liga a TV ao voltar. Detalhes em "Ligar a TV pelo app" abaixo.
    - **Botões que se explicam**: cada botão tem ícone e nome em português, agrupados por função
      (Navegação, Volume e canal, Recursos da TV, Reprodução, Botões coloridos). Passar o mouse mostra
      no rodapé o que o botão faz e o atalho de teclado; o **?** do topo abre o **Guia dos botões**.
@@ -265,13 +265,25 @@ então o botão **Ligar** usa o PS5 quando a TV Box não acorda:
 
 1. O app pergunta pelo PS5 com o protocolo de descoberta do app Remote Play (UDP 9302; em repouso ele
    responde `620 Server Standby`) e manda um **WAKEUP** com a credencial obtida no registro.
-2. O PS5 sai do repouso. Se, ao acordar assim, ele mandar o HDMI-CEC "ligar a TV" (One-Touch Play,
-   "Reprodução com um toque" no menu do PS5) e a TV obedecer, ela liga e troca para a entrada dele.
+2. O PS5 sai do repouso, mas **acordado pela rede ele não manda o HDMI-CEC "ligar a TV"** (One-Touch
+   Play, "Reprodução com um toque" no menu do PS5): a TV continua apagada. Ele só manda esse comando
+   ao ligar do zero ou quando um controle físico conecta.
+3. Então o app **reinicia o PS5 pelo Uso remoto**, com o `ps5ctl` do projeto Controle PS5: PS (Central
+   de controle) › ↓ (fileira de baixo) › ← (dá a volta até Energia) › ✕ › ↓ quatro vezes › ✕. O menu de
+   energia não dá a volta, então os quatro ↓ terminam em "Reiniciar PS5" mesmo que algum se perca.
+   Antes de cada ✕ o app lê a tela do PS5 por OCR (Vision) e só segue com "Energia" em foco e com a
+   descrição de "Reiniciar PS5" na tela: um ↓ perdido deixaria o foco em "Desligar PS5", e desligado o
+   PS5 não acorda mais pela rede.
+4. No boot o PS5 manda o One-Touch Play, e a TV liga já na entrada dele.
 
-**Estado do teste (19/10/2026):** o botão **Ligar** acordou o PS5 do repouso, mas a TV **não** ligou
-junto (o app esperou 90 s). Ainda não se sabe se é a configuração do HDMI ou se o acordar pela rede
-não manda esse comando. Faltam dois testes: apertar o botão PS do DualSense com a TV desligada e o
-PS5 em repouso (se a TV acender, o problema é o acordar pela rede) e o Wake-on-LAN direto na TV.
+**Testado em 20/10/2026:** TV desligada pelo app, TV Box fora da tomada e PS5 em repouso → botão
+**Ligar** → TV respondendo na entrada do PS5 em 142 s. O que não liga a TV, também medido: o WAKEUP
+pela rede (nem troca a entrada com a TV já ligada), o WAKEUP com `app-type:c` (o PS5 ignora), abrir uma
+sessão do Uso remoto e o PS apertado por ela. O Wake-on-LAN direto na TV também não funciona.
+
+O reinício **fecha jogos e apps suspensos** no repouso. Para esse passo o app precisa do `ps5ctl`
+(projeto Controle PS5) pareado com o console, em `~/.local/bin/ps5ctl` ou na variável `PS5CTL`, e do
+`ffmpeg` que ele usa para as capturas.
 
 Registro, uma vez só, em Configurações → "Ligar a TV pelo app" → PlayStation 5:
 
@@ -397,7 +409,7 @@ criado com permissão `0600`. Conteúdo típico:
 
 - **Ligar a TV direto pela rede não funciona** nesse modelo: em standby a NetCast desliga o
   controlador de rede (o `wol` existe como melhor esforço e não acorda esta TV). O app de Mac
-  tenta ligar a TV pela TV Box ou pelo PS5 via HDMI-CEC; veja "Ligar a TV pelo app".
+  liga a TV pela TV Box ou pelo PS5 via HDMI-CEC; veja "Ligar a TV pelo app".
 - A TV precisa estar ligada e na mesma rede. Não há acesso remoto pela internet (e nem deve
   haver: a porta 8080 não tem autenticação além do pairing).
 - Um só pairing key por TV; vários controladores podem usar o mesmo código.

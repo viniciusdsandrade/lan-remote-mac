@@ -17,6 +17,7 @@ swiftc -parse-as-library -O \
   "$SCRIPT_DIR/TVBoxLink.swift" \
   "$SCRIPT_DIR/PlayStationRemote.swift" \
   "$SCRIPT_DIR/PlayStationLink.swift" \
+  "$SCRIPT_DIR/PlayStationRestart.swift" \
   "$SCRIPT_DIR/PSNLoginView.swift" \
   "$SCRIPT_DIR/RemoteHelp.swift" \
   "$SCRIPT_DIR/RemoteComponents.swift" \

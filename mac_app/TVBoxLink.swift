@@ -163,6 +163,7 @@ extension LGTVClient {
         powerOnError = nil
         var problems: [String] = []
         var helper: String?
+        var restartConsole = false
 
         if let box, box.paired {
             powerOnStep = "Acordando a \(box.name) pelo Wi-Fi…"
@@ -187,6 +188,10 @@ extension LGTVClient {
                     awake.save()
                 }
                 helper = console.name
+                restartConsole = true
+            } catch PlayStationError.alreadyAwake {
+                helper = console.name   // awake with the TV off: the restart below still turns it on
+                restartConsole = true
             } catch {
                 problems.append(error.localizedDescription)
             }
@@ -200,9 +205,21 @@ extension LGTVClient {
             return
         }
 
-        // The picture comes back in seconds; the NetCast network takes almost a minute more.
-        powerOnStep = "\(helper) está ligando a TV. O controle volta a responder em até 1 minuto…"
-        let deadline = Date().addingTimeInterval(90)
+        // Woken over the network the PS5 leaves the TV off; it sends One-Touch Play when it boots.
+        if restartConsole, let console {
+            powerOnStep = "O \(helper) acordou, mas assim ele não liga a TV. Reiniciando o \(helper) pelo Uso remoto…"
+            do {
+                try await PlayStationRestart.run(console) { [weak self] step in self?.powerOnStep = step }
+            } catch {
+                failTurnOn(error.localizedDescription)
+                return
+            }
+        }
+
+        // The picture comes back in seconds; the NetCast network takes almost a minute more (and a
+        // restarting PS5 needs about 30 s before it turns the TV on).
+        powerOnStep = "\(helper) está ligando a TV. O controle volta a responder em até \(restartConsole ? 2 : 1) minuto\(restartConsole ? "s" : "")…"
+        let deadline = Date().addingTimeInterval(restartConsole ? 150 : 90)
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             await refreshStatus()

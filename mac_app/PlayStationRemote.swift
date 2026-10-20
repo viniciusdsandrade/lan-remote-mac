@@ -24,6 +24,8 @@ enum PlayStationError: LocalizedError {
     case rejected(Int, String?)
     case badResponse(String)
     case psn(String)
+    case noRemotePlayTool
+    case restartFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -39,6 +41,9 @@ enum PlayStationError: LocalizedError {
         case .rejected(let status, let reason): return "O PS5 recusou o registro (\(reason ?? "HTTP \(status)"))."
         case .badResponse(let why): return "Resposta inesperada do PS5 (\(why))."
         case .psn(let why): return "O login na PSN não deu certo (\(why))."
+        case .noRemotePlayTool:
+            return "O PS5 acordou, mas só liga a TV quando reinicia, e o app faz isso pelo Uso remoto com o ps5ctl (projeto Controle PS5), que não foi encontrado. Instale-o em ~/.local/bin/ps5ctl ou aponte a variável PS5CTL para ele."
+        case .restartFailed(let why): return "Não consegui reiniciar o PS5 pelo Uso remoto (\(why))."
         }
     }
 }
