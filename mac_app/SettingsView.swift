@@ -69,23 +69,7 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if let box = client.box, box.paired {
-                HStack(spacing: 10) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(.green)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(box.name)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.white)
-                        Text("Pareada · \(box.host)")
-                            .font(.caption)
-                            .foregroundColor(Color(white: 0.6))
-                    }
-                    Spacer()
-                    Button("Esquecer") { client.forgetBox() }
-                        .buttonStyle(RemoteButtonStyle(bg: Color(white: 0.22), height: 28, cornerRadius: 6))
-                        .frame(width: 84)
-                }
+                pairedRow(name: box.name, detail: "Pareada · \(box.host)", forget: client.forgetBox)
                 if client.powerState == .off {
                     Button(action: client.turnOn) {
                         Label("Ligar a TV agora", systemImage: "power")
@@ -101,6 +85,26 @@ struct SettingsView: View {
         .padding(14)
         .background(Color(white: 0.15))
         .cornerRadius(12)
+    }
+
+    private func pairedRow(name: String, detail: String, forget: @escaping () -> Void) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 18))
+                .foregroundColor(.green)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.white)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundColor(Color(white: 0.6))
+            }
+            Spacer()
+            Button("Esquecer", action: forget)
+                .buttonStyle(RemoteButtonStyle(bg: Color(white: 0.22), height: 28, cornerRadius: 6))
+                .frame(width: 84)
+        }
     }
 
     @ViewBuilder

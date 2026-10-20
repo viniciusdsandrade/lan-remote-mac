@@ -148,13 +148,8 @@ extension LGTVClient {
         powerState = .turningOn
         powerOnError = nil
         powerOnStep = "Acordando a \(box.name) pelo Wi-Fi…"
-        let mac = box.mac ?? ARPCache.mac(for: box.host)
-        if let mac, mac != box.mac {
-            self.box?.mac = mac
-            self.box?.save()
-        }
         do {
-            try await withBox { host in try await AndroidTVRemote.switchTVOn(host: host, mac: mac) }
+            try await wakeBox(box)
         } catch AndroidTVError.notPaired {
             self.box?.paired = false
             self.box?.save()
@@ -178,6 +173,15 @@ extension LGTVClient {
         }
         failTurnOn("A TV Box recebeu o pedido, mas a TV não respondeu. Confira se o SIMPLINK está ligado na TV "
                    + "e o controle HDMI (CEC) na TV Box.")
+    }
+
+    private func wakeBox(_ box: AndroidTVBox) async throws {
+        let mac = box.mac ?? ARPCache.mac(for: box.host)
+        if let mac, mac != box.mac {
+            self.box?.mac = mac
+            self.box?.save()
+        }
+        try await withBox { host in try await AndroidTVRemote.switchTVOn(host: host, mac: mac) }
     }
 
     private func failTurnOn(_ message: String) {
