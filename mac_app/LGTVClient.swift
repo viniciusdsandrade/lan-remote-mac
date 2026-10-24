@@ -295,6 +295,13 @@ final class LGTVClient: ObservableObject {
                 }
             }
         } catch {
+            if retryCount == 0 {
+                let relocated = await self.relocateTVIfNeeded()
+                if relocated {
+                    await self.performSendKey(code: code, label: label, retryCount: 1)
+                    return
+                }
+            }
             markUnreachable()
         }
     }
@@ -305,6 +312,25 @@ final class LGTVClient: ObservableObject {
             powerState = .off
         }
     }
+
+    /// Checks if the TV has moved to another IP address (DHCP) and updates configuration.
+    func relocateTVIfNeeded() async -> Bool {
+        guard let newHost = await LGTVDiscovery.locate(matching: config) else { return false }
+        if newHost != config.host {
+            NSLog("LG TV migrou de IP: %@ -> %@", config.host, newHost)
+            self.config.host = newHost
+            if self.config.mac == nil {
+                self.config.mac = ARPCache.mac(for: newHost)
+            }
+            self.saveConfigToDisk()
+            return true
+        }
+        if self.config.mac == nil, let mac = ARPCache.mac(for: newHost) {
+            self.config.mac = mac
+            self.saveConfigToDisk()
+        }
+        return false
+    }
     
     // MARK: - Status Queries
 
@@ -312,10 +338,20 @@ final class LGTVClient: ObservableObject {
     func screenImage() async -> Data? {
         let basePath = config.protocolType == "udap" ? "/udap/api/data" : "/roap/api/data"
         let request = createRequest(path: "\(basePath)?target=screen_image&session=\(config.session ?? "")")
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              data.starts(with: [0xFF, 0xD8]) else { return nil }
-        return data
+        if let (data, response) = try? await URLSession.shared.data(for: request),
+           (response as? HTTPURLResponse)?.statusCode == 200,
+           data.starts(with: [0xFF, 0xD8]) {
+            return data
+        }
+        if await relocateTVIfNeeded() {
+            let retryReq = createRequest(path: "\(basePath)?target=screen_image&session=\(config.session ?? "")")
+            if let (data, response) = try? await URLSession.shared.data(for: retryReq),
+               (response as? HTTPURLResponse)?.statusCode == 200,
+               data.starts(with: [0xFF, 0xD8]) {
+                return data
+            }
+        }
+        return nil
     }
 
     func refreshStatus() async {
@@ -323,8 +359,12 @@ final class LGTVClient: ObservableObject {
         isRefreshing = true
         defer { isRefreshing = false }
         
-        let session = config.session ?? ""
+        await performStatusRefresh(allowRelocate: true)
+    }
+
+    private func performStatusRefresh(allowRelocate: Bool) async {
         let basePath = config.protocolType == "udap" ? "/udap/api/data" : "/roap/api/data"
+        var session = config.session ?? ""
         let volPath = "\(basePath)?target=volume_info&session=\(session)"
         let volReq = createRequest(path: volPath)
 
@@ -338,26 +378,63 @@ final class LGTVClient: ObservableObject {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 (data, resp) = try await URLSession.shared.data(for: volReq)
             }
-            if let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 200 {
-                self.powerState = .on
-                self.powerOnError = nil
-                if let str = String(data: data, encoding: .utf8) {
-                    if let muteVal = Self.extractXMLTag(from: str, tag: "mute") {
-                        self.isMuted = (muteVal.lowercased() == "true")
+            if let httpResp = resp as? HTTPURLResponse {
+                if httpResp.statusCode == 200 {
+                    self.powerState = .on
+                    self.powerOnError = nil
+                    if config.mac == nil, let mac = ARPCache.mac(for: config.host) {
+                        self.config.mac = mac
+                        self.saveConfigToDisk()
                     }
-                    if let lvlVal = Self.extractXMLTag(from: str, tag: "level"), let lvl = Int(lvlVal) {
-                        self.volumeLevel = lvl
+                    if let str = String(data: data, encoding: .utf8) {
+                        if let muteVal = Self.extractXMLTag(from: str, tag: "mute") {
+                            self.isMuted = (muteVal.lowercased() == "true")
+                        }
+                        if let lvlVal = Self.extractXMLTag(from: str, tag: "level"), let lvl = Int(lvlVal) {
+                            self.volumeLevel = lvl
+                        }
                     }
+                } else if httpResp.statusCode == 401 {
+                    // Session expired or unauthenticated; attempt re-pairing
+                    if await self.pairWithSavedKey() {
+                        session = config.session ?? ""
+                        let retryVolPath = "\(basePath)?target=volume_info&session=\(session)"
+                        let retryReq = createRequest(path: retryVolPath)
+                        if let (vData, vResp) = try? await URLSession.shared.data(for: retryReq),
+                           (vResp as? HTTPURLResponse)?.statusCode == 200,
+                           let str = String(data: vData, encoding: .utf8) {
+                            self.powerState = .on
+                            self.powerOnError = nil
+                            if let muteVal = Self.extractXMLTag(from: str, tag: "mute") {
+                                self.isMuted = (muteVal.lowercased() == "true")
+                            }
+                            if let lvlVal = Self.extractXMLTag(from: str, tag: "level"), let lvl = Int(lvlVal) {
+                                self.volumeLevel = lvl
+                            }
+                        }
+                    } else {
+                        markUnreachable()
+                        return
+                    }
+                } else {
+                    markUnreachable()
+                    return
                 }
-            } else if let httpResp = resp as? HTTPURLResponse, httpResp.statusCode == 401 {
-                _ = await self.pairWithSavedKey()
             }
         } catch {
+            if allowRelocate {
+                let relocated = await self.relocateTVIfNeeded()
+                if relocated {
+                    await self.performStatusRefresh(allowRelocate: false)
+                    return
+                }
+            }
             markUnreachable()
             return   // no point asking for the channel as well
         }
         
         // Also fetch current channel / input
+        session = config.session ?? ""
         let chPath = "\(basePath)?target=cur_channel&session=\(session)"
         let chReq = createRequest(path: chPath)
         if let (chData, chResp) = try? await URLSession.shared.data(for: chReq),
@@ -426,7 +503,10 @@ final class LGTVClient: ObservableObject {
                     }
                     self.saveConfigToDisk()
                     self.powerState = .on
-                    await self.refreshStatus()
+                    self.powerOnError = nil
+                    if !isRefreshing {
+                        await self.refreshStatus()
+                    }
                     return (true, "Pareamento concluído com sucesso!")
                 } else if httpResp.statusCode == 401 {
                     return (false, "Código incorreto! Confira os dígitos exibidos na TV.")
@@ -448,7 +528,7 @@ final class LGTVClient: ObservableObject {
     
     // MARK: - Utilities
     
-    static func extractXMLTag(from xml: String, tag: String) -> String? {
+    nonisolated static func extractXMLTag(from xml: String, tag: String) -> String? {
         let pattern = "<\(tag)>\\s*([^<]+?)\\s*</\(tag)>"
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
               let match = regex.firstMatch(in: xml, options: [], range: NSRange(xml.startIndex..., in: xml)),

@@ -218,8 +218,8 @@ extension LGTVClient {
 
         // The picture comes back in seconds; the NetCast network takes almost a minute more (and a
         // restarting PS5 needs about 30 s before it turns the TV on).
-        powerOnStep = "\(helper) está ligando a TV. O controle volta a responder em até \(restartConsole ? 2 : 1) minuto\(restartConsole ? "s" : "")…"
-        let deadline = Date().addingTimeInterval(restartConsole ? 150 : 90)
+        powerOnStep = "\(helper) está ligando a TV. O controle volta a responder em até \(restartConsole ? 3 : 1) minuto\(restartConsole ? "s" : "")…"
+        let deadline = Date().addingTimeInterval(restartConsole ? 180 : 90)
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             await refreshStatus()

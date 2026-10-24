@@ -12,6 +12,7 @@ DESKTOP_LINK="$HOME/Desktop/$APP_NAME.app"
 
 echo "==> Compilando código Swift nativo..."
 swiftc -parse-as-library -O \
+  "$SCRIPT_DIR/LGTVDiscovery.swift" \
   "$SCRIPT_DIR/LGTVClient.swift" \
   "$SCRIPT_DIR/AndroidTVRemote.swift" \
   "$SCRIPT_DIR/TVBoxLink.swift" \

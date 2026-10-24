@@ -714,6 +714,32 @@ enum ARPCache {
         }
         return nil
     }
+
+    /// IPv4 address the Mac has cached for `mac` (normalized aa:bb:cc:dd:ee:ff).
+    static func ip(for targetMac: String) -> String? {
+        let cleanTarget = targetMac.lowercased().split(separator: ":").map { $0.count == 1 ? "0\($0)" : String($0) }.joined(separator: ":")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/arp")
+        process.arguments = ["-an"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        process.waitUntilExit()
+        for line in output.split(whereSeparator: \.isNewline) {
+            let words = line.split(separator: " ")
+            guard words.count >= 4, words[0] == "?", words[2] == "at" else { continue }
+            let rawIP = words[1].trimmingCharacters(in: CharacterSet(charactersIn: "()"))
+            let octets = words[3].split(separator: ":")
+            guard octets.count == 6, octets.allSatisfy({ $0.count <= 2 && $0.allSatisfy(\.isHexDigit) }) else { continue }
+            let candidateMac = octets.map { $0.count == 1 ? "0\($0)" : String($0) }.joined(separator: ":").lowercased()
+            if candidateMac == cleanTarget {
+                return rawIP
+            }
+        }
+        return nil
+    }
 }
 
 extension Data {

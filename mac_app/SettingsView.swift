@@ -16,6 +16,7 @@ struct SettingsView: View {
     @State private var alertMessage: String = ""
     @State private var showAlert: Bool = false
     @State private var isProcessing: Bool = false
+    @State private var isSearchingTV: Bool = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -67,6 +68,9 @@ struct SettingsView: View {
                 psnInput = ""
                 client.usePSNAccount(redirect)
             }
+        }
+        .onChange(of: client.config.host) { newHost in
+            hostInput = newHost
         }
     }
 
@@ -406,10 +410,26 @@ struct SettingsView: View {
                     .font(.system(size: 13, weight: .medium))
             }
 
-            Button(action: saveSettings) {
-                Text("Salvar IP e porta")
+            HStack(spacing: 10) {
+                Button(action: searchTV) {
+                    HStack(spacing: 6) {
+                        if isSearchingTV {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "magnifyingglass")
+                        }
+                        Text(isSearchingTV ? "Buscando…" : "Buscar TV na rede")
+                    }
+                }
+                .buttonStyle(RemoteButtonStyle(bg: Color(white: 0.25), height: 32))
+                .disabled(isSearchingTV)
+
+                Button(action: saveSettings) {
+                    Text("Salvar IP e porta")
+                }
+                .buttonStyle(RemoteButtonStyle(bg: Color.blue, height: 32))
             }
-            .buttonStyle(RemoteButtonStyle(bg: Color.blue, height: 32))
         }
         .padding(14)
         .background(Color(white: 0.15))
@@ -502,6 +522,30 @@ struct SettingsView: View {
             }
             alertTitle = "Configurações Salvas"
             alertMessage = "IP atualizado para \(cleanHost):\(cleanPort)."
+            showAlert = true
+        }
+    }
+
+    private func searchTV() {
+        isSearchingTV = true
+        Task {
+            if await client.relocateTVIfNeeded() {
+                hostInput = client.config.host
+                await client.refreshStatus()
+                alertTitle = "TV Localizada"
+                alertMessage = "A TV foi encontrada no novo IP: \(client.config.host):\(client.config.port)."
+            } else if let foundHost = await LGTVDiscovery.locate(matching: client.config) {
+                client.config.host = foundHost
+                client.saveConfigToDisk()
+                hostInput = foundHost
+                await client.refreshStatus()
+                alertTitle = "TV Localizada"
+                alertMessage = "A TV foi encontrada em \(foundHost):\(client.config.port)."
+            } else {
+                alertTitle = "TV Não Encontrada"
+                alertMessage = "Nenhuma TV LG NetCast respondeu na rede local. Verifique se ela está ligada e conectada ao Wi-Fi."
+            }
+            isSearchingTV = false
             showAlert = true
         }
     }

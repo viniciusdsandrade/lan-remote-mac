@@ -212,7 +212,8 @@ Para ter um controle remoto virtual nativo no macOS que parece um controle físi
      - `x`: Sair (Exit)
      - `Espaço`: Play
      - `0` a `9`: Dígitos diretos
-   - **Painel de Configurações**: Ícone de engrenagem para alterar IP, porta e solicitar/confirmar novo pareamento direto na interface.
+   - **Painel de Configurações**: Ícone de engrenagem para alterar IP, porta, buscar a TV na rede e solicitar/confirmar novo pareamento direto na interface.
+   - **Redescoberta e Migração de IP (DHCP)**: Se a TV receber um novo endereço IP do roteador ao ligar ou reiniciar, tanto o app macOS quanto o CLI localizam a TV automaticamente (via ARP cache e SSDP) e atualizam a configuração sem ficar presos em "Desligada".
 
 3. **Versão Desktop em Python puro (Tkinter)**:
    Se preferir executar uma versão desktop 100% em Python sem compilar nada:

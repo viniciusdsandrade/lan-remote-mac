@@ -772,6 +772,63 @@ def persist_tv(tv: LGNetCastTV, cfg: dict, extra: Optional[dict] = None) -> None
     save_config(cfg)
 
 
+def auto_locate_tv(cfg: dict, timeout: float = 2.0, debug: bool = False) -> Optional[dict]:
+    """Tenta localizar a TV LG NetCast caso o IP tenha mudado via DHCP."""
+    mac = cfg.get("mac")
+    port = int(cfg.get("port", DEFAULT_PORT))
+    if mac:
+        try:
+            out = subprocess.run(["arp", "-an"], capture_output=True, text=True, timeout=2).stdout
+            target_mac = ":".join(p.zfill(2) for p in mac.split(":")).lower()
+            for line in out.splitlines():
+                m = re.search(r"\((\d+\.\d+\.\d+\.\d+)\)\s+at\s+([0-9a-fA-F:]+)", line)
+                if m:
+                    cand_ip, cand_mac = m.group(1), m.group(2)
+                    cand_mac = ":".join(p.zfill(2) for p in cand_mac.split(":")).lower()
+                    if cand_mac == target_mac:
+                        info = identify_tv(cand_ip, port, timeout=1.0, debug=debug)
+                        if info:
+                            return info
+        except Exception:
+            pass
+
+    try:
+        tvs = discover(timeout=timeout, scan=False, port=port, debug=debug)
+        if mac:
+            for t in tvs:
+                t_mac = mac_from_arp(t["ip"])
+                if t_mac and t_mac.lower() == mac.lower():
+                    return t
+        for t in tvs:
+            if cfg.get("name") and t.get("friendlyName") == cfg.get("name"):
+                return t
+            if cfg.get("model") and t.get("modelName") == cfg.get("model"):
+                return t
+        if len(tvs) == 1:
+            return tvs[0]
+    except Exception:
+        pass
+    return None
+
+
+def try_relocate_tv(tv: LGNetCastTV, cfg: dict, args: argparse.Namespace) -> bool:
+    """Se o host nao foi fixado na CLI e a conexao falhou, tenta achar a TV no novo IP DHCP."""
+    if args.host or os.environ.get("LG_TV_HOST"):
+        return False
+    found = auto_locate_tv(cfg, debug=args.debug)
+    if found and found["ip"] != tv.host:
+        print(f"[aviso] TV migrou de IP ({tv.host} -> {found['ip']}). Atualizando config...", file=sys.stderr)
+        tv.host = found["ip"]
+        cfg["host"] = found["ip"]
+        if found.get("modelName"):
+            cfg["model"] = found["modelName"]
+        if found.get("friendlyName"):
+            cfg["name"] = found["friendlyName"]
+        save_config(cfg)
+        return True
+    return False
+
+
 def interactive_pair(tv: LGNetCastTV, cfg: dict, key: Optional[str]) -> None:
     """Fluxo completo de pairing com prompt para o codigo da tela."""
     if tv.protocol == "auto":
@@ -868,14 +925,29 @@ def cmd_send(args: argparse.Namespace, cfg: dict) -> int:
             _fail(f"tecla desconhecida: {name!r}. Veja 'keys'.")
         codes.append((name, code))
     tv = build_tv(args, cfg)
-    _ensure_paired(tv, cfg)
     try:
+        _ensure_paired(tv, cfg)
         for i, (name, code) in enumerate(codes):
             if i and args.delay > 0:
                 time.sleep(args.delay)
             tv.send_key(code)
             if not args.quiet:
                 print(f"ok: {name} ({code})")
+    except TVConnectionError as e:
+        if try_relocate_tv(tv, cfg, args):
+            _ensure_paired(tv, cfg)
+            try:
+                for i, (name, code) in enumerate(codes):
+                    if i and args.delay > 0:
+                        time.sleep(args.delay)
+                    tv.send_key(code)
+                    if not args.quiet:
+                        print(f"ok: {name} ({code})")
+                _persist_if_changed(tv, cfg)
+                return 0
+            except TVError as e2:
+                _fail(str(e2))
+        _fail(str(e))
     except TVError as e:
         _fail(str(e))  # nada e salvo: um --key errado nao sobrescreve a chave boa
     _persist_if_changed(tv, cfg)
@@ -898,23 +970,32 @@ def cmd_digits(args: argparse.Namespace, cfg: dict) -> int:
 
 def cmd_status(args: argparse.Namespace, cfg: dict) -> int:
     tv = build_tv(args, cfg)
-    _ensure_paired(tv, cfg)
+    try:
+        _ensure_paired(tv, cfg)
+    except TVConnectionError as e:
+        if try_relocate_tv(tv, cfg, args):
+            return cmd_status(args, cfg)
+        _fail(str(e))
     targets = [args.target] if args.target else ["volume_info", "cur_channel", "context_ui"]
     rc = 0
-    try:
-        info = tv.device_info()
-        if info:
-            print(f"TV: {info.get('modelName', '?')}  nome={info.get('friendlyName', '?')}  "
-                  f"ip={tv.host}  protocolo={tv.protocol}")
-        for t in targets:
-            try:
-                data = tv.query(t)
-                print(f"[{t}] " + ", ".join(f"{k}={v}" for k, v in data.items()) if data else f"[{t}] (vazio)")
-            except TVError as e:
-                print(f"[{t}] falhou: {e}")
-                rc = 1
-    except TVError as e:
-        _fail(str(e))
+    info = tv.device_info()
+    if not info and try_relocate_tv(tv, cfg, args):
+        return cmd_status(args, cfg)
+    if info:
+        print(f"TV: {info.get('modelName', '?')}  nome={info.get('friendlyName', '?')}  "
+              f"ip={tv.host}  protocolo={tv.protocol}")
+    for t in targets:
+        try:
+            data = tv.query(t)
+            print(f"[{t}] " + ", ".join(f"{k}={v}" for k, v in data.items()) if data else f"[{t}] (vazio)")
+        except TVConnectionError as e:
+            if try_relocate_tv(tv, cfg, args):
+                return cmd_status(args, cfg)
+            print(f"[{t}] falhou: {e}")
+            rc = 1
+        except TVError as e:
+            print(f"[{t}] falhou: {e}")
+            rc = 1
     if rc == 0:
         _persist_if_changed(tv, cfg)
     return rc
@@ -923,9 +1004,20 @@ def cmd_status(args: argparse.Namespace, cfg: dict) -> int:
 def cmd_info(args: argparse.Namespace, cfg: dict) -> int:
     """Mostra modelo/nome e a variante de protocolo da TV. Nao mostra codigo na tela."""
     tv = build_tv(args, cfg)
-    try:
+    info = tv.device_info()
+    if not info and try_relocate_tv(tv, cfg, args):
         info = tv.device_info()
+    try:
         proto = tv.detect_protocol() if tv.protocol == "auto" else tv.protocol
+    except TVConnectionError as e:
+        if try_relocate_tv(tv, cfg, args):
+            try:
+                info = tv.device_info()
+                proto = tv.detect_protocol() if tv.protocol == "auto" else tv.protocol
+            except TVError as e2:
+                _fail(str(e2))
+        else:
+            _fail(str(e))
     except TVError as e:
         _fail(str(e))
     print(f"TV em {tv.host}:{tv.port}")
