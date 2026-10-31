@@ -611,6 +611,19 @@ def ssdp_search(timeout: float = 3.0, debug: bool = False, udap: bool = True) ->
     return list(found.values())
 
 
+def _port_open(host: str, port: int, timeout: float) -> bool:
+    """A porta TCP aceita conexao? So conecta e fecha, sem mandar nada."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect((host, port))
+        return True
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
 def identify_tv(ip: str, port: int = DEFAULT_PORT, timeout: float = 2.0,
                 debug: bool = False, location: Optional[str] = None,
                 udap: bool = True) -> Optional[Dict[str, str]]:
@@ -633,6 +646,10 @@ def identify_tv(ip: str, port: int = DEFAULT_PORT, timeout: float = 2.0,
                     return info
         except TVConnectionError:
             return None  # porta 8080 fechada: nao e uma NetCast ligada
+    elif not _port_open(ip, port, timeout):
+        # Sem a descricao UDAP, a porta 8080 e conferida aqui: a descricao UPnP abaixo vem do
+        # servidor DLNA, que outros aparelhos LG (TV webOS, soundbar) tambem tem.
+        return None
     # 2) Descricao UPnP apontada pelo LOCATION do SSDP.
     if location:
         try:
@@ -679,15 +696,7 @@ def scan_subnet(timeout: float = 0.4, port: int = DEFAULT_PORT, cidr: Optional[s
         raise TVError(f"rede {cidr} grande demais para varrer ({len(hosts)} hosts); use um /24")
 
     def probe(h: str) -> Optional[str]:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(timeout)
-        try:
-            s.connect((h, port))
-            return h
-        except OSError:
-            return None
-        finally:
-            s.close()
+        return h if _port_open(h, port, timeout) else None
 
     with ThreadPoolExecutor(max_workers=64) as ex:
         results = list(ex.map(probe, hosts))

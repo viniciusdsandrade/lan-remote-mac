@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import unittest
+import urllib.parse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,7 @@ import lg_roap_control as lg  # noqa: E402
 
 TV_IP = "192.0.2.50"
 TV_MAC = "02:00:5e:00:00:01"
+OTHER_LG_IP = "192.0.2.60"   # TV webOS ou soundbar: tem o renderizador DLNA, não a porta 8080
 DLNA_REPLY = (
     "HTTP/1.1 200 OK\r\n"
     "ST: urn:schemas-upnp-org:device:MediaRenderer:1\r\n"
@@ -70,8 +72,9 @@ class LgDiscoveryWithoutPopupTest(unittest.TestCase):
         self.replies = []
         self.requests = []
         self.arp_table = ""
+        self.open_8080 = {TV_IP}
         self.saved = (lg.socket.socket, lg.select.select, lg.http_request, lg.scan_subnet,
-                      lg.subprocess.run)
+                      lg.subprocess.run, lg._port_open)
 
         def fake_select(readable, writable, failed, timeout=None):
             sock = readable[0]
@@ -84,6 +87,8 @@ class LgDiscoveryWithoutPopupTest(unittest.TestCase):
             self.requests.append((url, dict(headers or {})))
             if url.endswith("/description.xml"):
                 return lg.HttpResponse(200, UPNP_DESCRIPTION, {})
+            if urllib.parse.urlsplit(url).hostname not in self.open_8080:
+                raise lg.TVConnectionError(f"sem resposta de {url}")
             if "/roap/api/data" in url:
                 return lg.HttpResponse(401, "", {})
             return lg.HttpResponse(404, "", {})
@@ -104,10 +109,11 @@ class LgDiscoveryWithoutPopupTest(unittest.TestCase):
         lg.http_request = fake_http
         lg.scan_subnet = lambda **kwargs: []
         lg.subprocess.run = fake_run
+        lg._port_open = lambda host, port, timeout: host in self.open_8080
 
     def tearDown(self):
         (lg.socket.socket, lg.select.select, lg.http_request, lg.scan_subnet,
-         lg.subprocess.run) = self.saved
+         lg.subprocess.run, lg._port_open) = self.saved
 
     def assertNothingUdap(self):
         for datagram in self.datagrams:
@@ -133,6 +139,15 @@ class LgDiscoveryWithoutPopupTest(unittest.TestCase):
         self.assertIn("ST: urn:schemas-upnp-org:device:MediaRenderer:1", self.datagrams[0])
         self.assertNothingUdap()
 
+    def test_relocation_ignores_lg_devices_without_port_8080(self):
+        # TV desligada; à busca DLNA responde outro aparelho LG, com descrição "LG Electronics".
+        self.open_8080 = set()
+        reply = DLNA_REPLY.replace(TV_IP, OTHER_LG_IP)
+        self.replies.append((reply.encode(), (OTHER_LG_IP, 1900)))
+        found = lg.auto_locate_tv({"mac": TV_MAC, "host": TV_IP}, timeout=0.2)
+        self.assertIsNone(found)
+        self.assertNothingUdap()
+
     def test_explicit_discover_keeps_the_udap_search(self):
         lg.discover(timeout=0.2)
         sent = "\n".join(self.datagrams)
@@ -156,10 +171,20 @@ class LgDiscoveryWithoutPopupTest(unittest.TestCase):
         for payload in payloads:
             if "udap" in payload.group(0).lower():
                 self.assertTrue(gate < payload.start() < dlna, "busca UDAP fora do `if udap`")
+        self.assertRegex(body, r"\} else \{\s*sendUDP\(payload: dlnaSearch",
+                         "a busca UDAP repete a DLNA, que já rodou antes dela")
 
         client = _read("mac_app/LGTVClient.swift")
         self.assertIn("allowUDAP: askedByUser", client)
         self.assertIn("timeIntervalSince(lastAutomaticSearch) >= 30", client)
+        locate = client[client.index("func locateTV"):client.index("func relocateTVIfNeeded")]
+        self.assertLess(locate.index("probeKnownHosts(of: config)"),
+                        locate.index("lastAutomaticSearch"),
+                        "o limite de 30 s barra também o IP salvo e o cache ARP")
+
+        settings = _read("mac_app/SettingsView.swift")
+        self.assertEqual(settings.count("locateTV(askedByUser: true)"), 1)
+        self.assertNotIn("LGTVDiscovery.locate", settings, "o botão busca a TV duas vezes")
         for path in sorted((ROOT / "mac_app").glob("*.swift")):
             text = path.read_text(encoding="utf-8")
             self.assertNotIn("allowUDAP: true", text, path.name)

@@ -121,8 +121,10 @@ que falhava. A TV tem um segundo servidor SSDP, o renderizador DLNA
 `urn:schemas-upnp-org:device:MediaRenderer:1`. Por isso a busca UDAP fica só no `discover`, no
 `pair` e no botão "Buscar TV na rede" do app (depois da DLNA), quando alguém pediu. A
 redescoberta automática procura a TV pelo MAC no cache ARP e pela busca DLNA, sem `UDAP/2.0` no
-User-Agent, no máximo a cada 30 s no app. O sufixo do `modelName` muda de uma ligação para outra
-e não serve para reconhecer a TV; o MAC serve.
+User-Agent. No app, o IP salvo e o cache ARP são conferidos a cada falha, e a busca DLNA roda no
+máximo a cada 30 s. Outros aparelhos LG com DLNA, como uma TV webOS, podem responder à busca com
+`manufacturer` LG Electronics: quem responde só conta como a TV se a porta 8080 também abrir. O
+sufixo do `modelName` muda de uma ligação para outra e não serve para reconhecer a TV; o MAC serve.
 
 ### 2. Pairing
 

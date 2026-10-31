@@ -43,10 +43,9 @@ enum LGTVDiscovery {
         }
     }
 
-    /// Locates the LG TV matching `config` (by current IP, ARP table cache, or SSDP discovery).
-    /// The SSDP step searches through DLNA; `allowUDAP` (a search the user asked for) falls back to
-    /// the UDAP search, which shows the discovery popup on the TV.
-    static func locate(matching config: TVConfig, allowUDAP: Bool = false) async -> String? {
+    /// Where the LG TV matching `config` answers without a search: the configured IP, then the IP the
+    /// ARP cache has for its MAC. Two quick probes.
+    static func probeKnownHosts(of config: TVConfig) async -> String? {
         let port = config.port > 0 ? config.port : defaultPort
 
         // 1. Fast check: is the currently configured host responding?
@@ -60,8 +59,12 @@ enum LGTVDiscovery {
                 return arpIP
             }
         }
+        return nil
+    }
 
-        // 3. SSDP: DLNA first, UDAP only when the user asked for the search
+    /// Locates the LG TV matching `config` by SSDP: the DLNA search, then with `allowUDAP` (a search
+    /// the user asked for) the UDAP search, which shows the discovery popup on the TV.
+    static func locate(matching config: TVConfig, allowUDAP: Bool = false) async -> String? {
         if let host = match(config, in: await search(timeout: 2.0, udap: false)) {
             return host
         }
@@ -94,8 +97,8 @@ enum LGTVDiscovery {
         return nil
     }
 
-    /// Searches for LG NetCast TVs on the local network via SSDP: the DLNA renderer search, plus
-    /// with `udap` the UDAP search in multicast and broadcast.
+    /// Searches for LG NetCast TVs on the local network via SSDP: the DLNA renderer search, or with
+    /// `udap` the UDAP search in multicast and broadcast (which shows the discovery popup on the TV).
     static func search(timeout: TimeInterval = 2.0, udap: Bool = false) async -> [DiscoveredLGTV] {
         let candidateIPs = await Task.detached(priority: .userInitiated) {
             discoverCandidates(timeout: timeout, udap: udap)
@@ -110,7 +113,7 @@ enum LGTVDiscovery {
         return results
     }
 
-    /// Sends the SSDP searches (M-SEARCH, and B-SEARCH with `udap`) and collects sender IP addresses.
+    /// Sends the SSDP searches (DLNA, or with `udap` M-SEARCH and B-SEARCH) and collects sender IP addresses.
     private static func discoverCandidates(timeout: TimeInterval, udap: Bool) -> [String] {
         let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
         guard fd >= 0 else { return [] }
@@ -126,8 +129,9 @@ enum LGTVDiscovery {
             let bsearchRootservice = "B-SEARCH * HTTP/1.1\r\nHOST: 255.255.255.255:1990\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: udap:rootservice\r\nUSER-AGENT: macOS/1.0 UDAP/2.0 lg_roap_control/1.0.0\r\n\r\n"
             sendUDP(payload: msearchRootservice, to: "239.255.255.250", port: ssdpPort, fd: fd)
             sendUDP(payload: bsearchRootservice, to: "255.255.255.255", port: bcastPort, fd: fd)
+        } else {
+            sendUDP(payload: dlnaSearch, to: "239.255.255.250", port: ssdpPort, fd: fd)
         }
-        sendUDP(payload: dlnaSearch, to: "239.255.255.250", port: ssdpPort, fd: fd)
 
         var foundIPs = Set<String>()
         var buffer = [UInt8](repeating: 0, count: 2048)

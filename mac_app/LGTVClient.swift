@@ -314,16 +314,20 @@ final class LGTVClient: ObservableObject {
         }
     }
 
-    /// Checks if the TV has moved to another IP address (DHCP) and updates configuration.
-    /// Every failed request asks for this, and this TV often stalls for many seconds, so the automatic
-    /// searches run at most every 30 s. `askedByUser` (Settings) skips that wait and may use the UDAP
-    /// search, whose popup on the TV is expected there.
-    func relocateTVIfNeeded(askedByUser: Bool = false) async -> Bool {
-        if !askedByUser {
-            guard Date().timeIntervalSince(lastAutomaticSearch) >= 30 else { return false }
-            lastAutomaticSearch = Date()
+    /// Where the TV answers now (nil when it wasn't found); a new IP (DHCP) goes to the configuration.
+    /// The configured IP and the ARP cache are checked every time. Every failed request asks for this,
+    /// and this TV often stalls for many seconds, so the automatic SSDP search runs at most every 30 s.
+    /// `askedByUser` (Settings) skips that wait and may use the UDAP search, whose popup on the TV is
+    /// expected there.
+    func locateTV(askedByUser: Bool = false) async -> String? {
+        var found = await LGTVDiscovery.probeKnownHosts(of: config)
+        if found == nil, askedByUser || Date().timeIntervalSince(lastAutomaticSearch) >= 30 {
+            if !askedByUser {
+                lastAutomaticSearch = Date()
+            }
+            found = await LGTVDiscovery.locate(matching: config, allowUDAP: askedByUser)
         }
-        guard let newHost = await LGTVDiscovery.locate(matching: config, allowUDAP: askedByUser) else { return false }
+        guard let newHost = found else { return nil }
         if newHost != config.host {
             NSLog("LG TV migrou de IP: %@ -> %@", config.host, newHost)
             self.config.host = newHost
@@ -331,13 +335,18 @@ final class LGTVClient: ObservableObject {
                 self.config.mac = ARPCache.mac(for: newHost)
             }
             self.saveConfigToDisk()
-            return true
-        }
-        if self.config.mac == nil, let mac = ARPCache.mac(for: newHost) {
+        } else if self.config.mac == nil, let mac = ARPCache.mac(for: newHost) {
             self.config.mac = mac
             self.saveConfigToDisk()
         }
-        return false
+        return newHost
+    }
+
+    /// Checks if the TV has moved to another IP address (DHCP) and updates configuration.
+    func relocateTVIfNeeded() async -> Bool {
+        let oldHost = config.host
+        guard let newHost = await locateTV() else { return false }
+        return newHost != oldHost
     }
     
     // MARK: - Status Queries

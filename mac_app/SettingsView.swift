@@ -529,18 +529,14 @@ struct SettingsView: View {
     private func searchTV() {
         isSearchingTV = true
         Task {
-            if await client.relocateTVIfNeeded(askedByUser: true) {
-                hostInput = client.config.host
-                await client.refreshStatus()
-                alertTitle = "TV Localizada"
-                alertMessage = "A TV foi encontrada no novo IP: \(client.config.host):\(client.config.port)."
-            } else if let foundHost = await LGTVDiscovery.locate(matching: client.config) {
-                client.config.host = foundHost
-                client.saveConfigToDisk()
+            let oldHost = client.config.host
+            if let foundHost = await client.locateTV(askedByUser: true) {
                 hostInput = foundHost
                 await client.refreshStatus()
                 alertTitle = "TV Localizada"
-                alertMessage = "A TV foi encontrada em \(foundHost):\(client.config.port)."
+                alertMessage = foundHost == oldHost
+                    ? "A TV foi encontrada em \(foundHost):\(client.config.port)."
+                    : "A TV foi encontrada no novo IP: \(foundHost):\(client.config.port)."
             } else {
                 alertTitle = "TV Não Encontrada"
                 alertMessage = "Nenhuma TV LG NetCast respondeu na rede local. Verifique se ela está ligada e conectada ao Wi-Fi."
