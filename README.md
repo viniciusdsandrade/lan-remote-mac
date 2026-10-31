@@ -213,7 +213,7 @@ Para ter um controle remoto virtual nativo no macOS que parece um controle físi
      - `Espaço`: Play
      - `0` a `9`: Dígitos diretos
    - **Painel de Configurações**: Ícone de engrenagem para alterar IP, porta, buscar a TV na rede e solicitar/confirmar novo pareamento direto na interface.
-   - **Redescoberta e Migração de IP (DHCP)**: Se a TV receber um novo endereço IP do roteador ao ligar ou reiniciar, tanto o app macOS quanto o CLI localizam a TV automaticamente (via ARP cache e SSDP) e atualizam a configuração sem ficar presos em "Desligada".
+   - **Redescoberta e Migração de IP (DHCP)**: Se a TV receber um novo endereço IP do roteador ao ligar ou reiniciar, tanto o app macOS quanto o CLI localizam a TV automaticamente (pelo MAC no cache ARP e pela busca DLNA) e atualizam a configuração sem ficar presos em "Desligada". A busca UDAP, que põe o pop-up "Pairing Key" na tela da TV, só roda quando você clica em "Buscar TV na rede" e a busca DLNA não achou a TV.
 
 3. **Versão Desktop em Python puro (Tkinter)**:
    Se preferir executar uma versão desktop 100% em Python sem compilar nada:
@@ -399,6 +399,10 @@ criado com permissão `0600`. Conteúdo típico:
   troca para o handler UDAP 2.0 (`SERVER: ... UDAP/2.0`) e rejeita o XML do ROAP. O programa usa
   User-Agent neutro no ROAP e `UDAP/2.0` só no SSDP, na descrição e na variante udap. Se for
   testar com `curl`, não passe `-A "... UDAP/2.0"` em chamadas `/roap/api/...`.
+- **Pop-up "Pairing Key" no canto inferior direito** (nome do modelo, celular apontando para a
+  TV, campo vazio): é a TV respondendo a uma busca UDAP (`udap:rootservice`), como manda o spec.
+  Até 30/10/2026 a redescoberta automática fazia essa busca a cada requisição que falhava, e o
+  pop-up voltava várias vezes por minuto. Hoje ela usa só a busca DLNA; veja PROTOCOLO.md.
 - **Teclas iguais em rajada são descartadas**: três `vol+` enviados sem intervalo (cliques em
   paralelo) viraram um só na TV; a cada 0,3 s os três registram (10 para 13). Por isso o
   `send` usa 0,3 s entre teclas por padrão e o `remote` espaça os envios sozinho.

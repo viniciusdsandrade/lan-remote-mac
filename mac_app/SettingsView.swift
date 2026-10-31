@@ -529,7 +529,7 @@ struct SettingsView: View {
     private func searchTV() {
         isSearchingTV = true
         Task {
-            if await client.relocateTVIfNeeded() {
+            if await client.relocateTVIfNeeded(askedByUser: true) {
                 hostInput = client.config.host
                 await client.refreshStatus()
                 alertTitle = "TV Localizada"

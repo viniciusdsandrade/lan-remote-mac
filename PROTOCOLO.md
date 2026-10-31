@@ -108,8 +108,21 @@ LOCATION: http://192.0.2.100:8080/udap/api/data?target=rootservice.xml
 ```
 
 O spec prevê ainda o `B-SEARCH` em broadcast (`255.255.255.255:1990`) para roteadores que
-bloqueiam multicast; o programa envia os dois. Se nada responder, `discover --scan` testa a
+bloqueiam multicast; o `discover` envia os dois. Se nada responder, `discover --scan` testa a
 porta 8080 em toda a sub-rede /24 e identifica LG pelo `rootservice.xml`.
+
+**Toda busca UDAP aparece na tela.** Depois de responder a um ST UDAP válido
+(`udap:rootservice` ou `urn:schemas-udap:service:...`, por M-SEARCH ou B-SEARCH), a TV mostra no
+canto inferior direito o pop-up de descoberta: o `modelName`, um celular apontando para a TV e o
+campo "Pairing Key" (spec, figura "Host screen after discovery response"). Na TV real, em
+30/10/2026, ele voltava a cada busca da redescoberta automática, que rodava a cada requisição
+que falhava. A TV tem um segundo servidor SSDP, o renderizador DLNA
+(`SERVER: Linux/i686 UPnP/1.0 DLNADOC/1.50 Platinum/1.0.3.0`), que responde ao
+`urn:schemas-upnp-org:device:MediaRenderer:1`. Por isso a busca UDAP fica só no `discover`, no
+`pair` e no botão "Buscar TV na rede" do app (depois da DLNA), quando alguém pediu. A
+redescoberta automática procura a TV pelo MAC no cache ARP e pela busca DLNA, sem `UDAP/2.0` no
+User-Agent, no máximo a cada 30 s no app. O sufixo do `modelName` muda de uma ligação para outra
+e não serve para reconhecer a TV; o MAC serve.
 
 ### 2. Pairing
 

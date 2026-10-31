@@ -22,6 +22,11 @@ enum LGTVDiscovery {
     static let bcastPort: UInt16 = 1990
     static let defaultPort: Int = 8080
 
+    /// Search for the TV's DLNA renderer, a server of its own on the TV. Every answer to a UDAP search
+    /// (udap:rootservice) puts LG's discovery popup on screen instead: "model_XX", a phone pointing at
+    /// the TV and a "Pairing Key" field (UDAP 2.0 spec, "Host screen after discovery response").
+    static let dlnaSearch = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\nUSER-AGENT: macOS/1.0 UPnP/1.1 lg_roap_control/1.0.0\r\n\r\n"
+
     /// Quick probe to check if a TV answers HTTP on `host:port`.
     static func probeHost(_ host: String, port: Int = defaultPort, timeout: TimeInterval = 1.0) async -> Bool {
         guard let url = URL(string: "http://\(host):\(port)/roap/api/data?target=volume_info") else { return false }
@@ -39,7 +44,9 @@ enum LGTVDiscovery {
     }
 
     /// Locates the LG TV matching `config` (by current IP, ARP table cache, or SSDP discovery).
-    static func locate(matching config: TVConfig) async -> String? {
+    /// The SSDP step searches through DLNA; `allowUDAP` (a search the user asked for) falls back to
+    /// the UDAP search, which shows the discovery popup on the TV.
+    static func locate(matching config: TVConfig, allowUDAP: Bool = false) async -> String? {
         let port = config.port > 0 ? config.port : defaultPort
 
         // 1. Fast check: is the currently configured host responding?
@@ -54,9 +61,15 @@ enum LGTVDiscovery {
             }
         }
 
-        // 3. SSDP M-SEARCH / B-SEARCH
-        let found = await search(timeout: 2.0)
+        // 3. SSDP: DLNA first, UDAP only when the user asked for the search
+        if let host = match(config, in: await search(timeout: 2.0, udap: false)) {
+            return host
+        }
+        guard allowUDAP else { return nil }
+        return match(config, in: await search(timeout: 2.0, udap: true))
+    }
 
+    private static func match(_ config: TVConfig, in found: [DiscoveredLGTV]) -> String? {
         // Match by MAC
         if let mac = config.mac {
             let cleanMac = mac.lowercased()
@@ -81,23 +94,24 @@ enum LGTVDiscovery {
         return nil
     }
 
-    /// Searches for LG NetCast TVs on the local network via SSDP multicast and broadcast.
-    static func search(timeout: TimeInterval = 2.0) async -> [DiscoveredLGTV] {
+    /// Searches for LG NetCast TVs on the local network via SSDP: the DLNA renderer search, plus
+    /// with `udap` the UDAP search in multicast and broadcast.
+    static func search(timeout: TimeInterval = 2.0, udap: Bool = false) async -> [DiscoveredLGTV] {
         let candidateIPs = await Task.detached(priority: .userInitiated) {
-            discoverCandidates(timeout: timeout)
+            discoverCandidates(timeout: timeout, udap: udap)
         }.value
 
         var results: [DiscoveredLGTV] = []
         for ip in candidateIPs {
-            if let tv = await inspectTV(host: ip) {
+            if let tv = await inspectTV(host: ip, udap: udap) {
                 results.append(tv)
             }
         }
         return results
     }
 
-    /// Sends SSDP M-SEARCH and B-SEARCH and collects sender IP addresses.
-    private static func discoverCandidates(timeout: TimeInterval) -> [String] {
+    /// Sends the SSDP searches (M-SEARCH, and B-SEARCH with `udap`) and collects sender IP addresses.
+    private static func discoverCandidates(timeout: TimeInterval, udap: Bool) -> [String] {
         let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
         guard fd >= 0 else { return [] }
         defer { Darwin.close(fd) }
@@ -107,13 +121,13 @@ enum LGTVDiscovery {
         var ttl: u_char = 2
         setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, socklen_t(MemoryLayout<u_char>.size))
 
-        let msearchRootservice = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: udap:rootservice\r\nUSER-AGENT: macOS/1.0 UDAP/2.0 lg_roap_control/1.0.0\r\n\r\n"
-        let msearchMediaRenderer = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: urn:schemas-upnp-org:device:MediaRenderer:1\r\nUSER-AGENT: macOS/1.0 UDAP/2.0 lg_roap_control/1.0.0\r\n\r\n"
-        let bsearchRootservice = "B-SEARCH * HTTP/1.1\r\nHOST: 255.255.255.255:1990\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: udap:rootservice\r\nUSER-AGENT: macOS/1.0 UDAP/2.0 lg_roap_control/1.0.0\r\n\r\n"
-
-        sendUDP(payload: msearchRootservice, to: "239.255.255.250", port: ssdpPort, fd: fd)
-        sendUDP(payload: msearchMediaRenderer, to: "239.255.255.250", port: ssdpPort, fd: fd)
-        sendUDP(payload: bsearchRootservice, to: "255.255.255.255", port: bcastPort, fd: fd)
+        if udap {
+            let msearchRootservice = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: udap:rootservice\r\nUSER-AGENT: macOS/1.0 UDAP/2.0 lg_roap_control/1.0.0\r\n\r\n"
+            let bsearchRootservice = "B-SEARCH * HTTP/1.1\r\nHOST: 255.255.255.255:1990\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: udap:rootservice\r\nUSER-AGENT: macOS/1.0 UDAP/2.0 lg_roap_control/1.0.0\r\n\r\n"
+            sendUDP(payload: msearchRootservice, to: "239.255.255.250", port: ssdpPort, fd: fd)
+            sendUDP(payload: bsearchRootservice, to: "255.255.255.255", port: bcastPort, fd: fd)
+        }
+        sendUDP(payload: dlnaSearch, to: "239.255.255.250", port: ssdpPort, fd: fd)
 
         var foundIPs = Set<String>()
         var buffer = [UInt8](repeating: 0, count: 2048)
@@ -169,12 +183,10 @@ enum LGTVDiscovery {
         }
     }
 
-    /// Fetches details from rootservice.xml or volume_info on the candidate IP.
-    private static func inspectTV(host: String, port: Int = defaultPort) async -> DiscoveredLGTV? {
-        let mac = ARPCache.mac(for: host)
-
+    /// Fetches details from rootservice.xml (with `udap`) or volume_info on the candidate IP.
+    private static func inspectTV(host: String, port: Int = defaultPort, udap: Bool) async -> DiscoveredLGTV? {
         // Try rootservice.xml with UDAP/2.0 User-Agent
-        if let url = URL(string: "http://\(host):\(port)/udap/api/data?target=rootservice.xml") {
+        if udap, let url = URL(string: "http://\(host):\(port)/udap/api/data?target=rootservice.xml") {
             var req = URLRequest(url: url)
             req.timeoutInterval = 1.5
             req.setValue("Close", forHTTPHeaderField: "Connection")
@@ -185,13 +197,14 @@ enum LGTVDiscovery {
                 let model = LGTVClient.extractXMLTag(from: xml, tag: "modelName")
                 let name = LGTVClient.extractXMLTag(from: xml, tag: "friendlyName")
                 let uuid = LGTVClient.extractXMLTag(from: xml, tag: "uuid")
-                return DiscoveredLGTV(host: host, port: port, model: model, name: name, mac: mac, uuid: uuid)
+                return DiscoveredLGTV(host: host, port: port, model: model, name: name, mac: ARPCache.mac(for: host), uuid: uuid)
             }
         }
 
-        // Fallback: check if volume_info endpoint exists (returns 200 or 401)
+        // Fallback: check if volume_info endpoint exists (returns 200 or 401). The MAC is read after
+        // the request, which is what puts a host found by the search in the ARP cache.
         if await probeHost(host, port: port) {
-            return DiscoveredLGTV(host: host, port: port, model: nil, name: nil, mac: mac, uuid: nil)
+            return DiscoveredLGTV(host: host, port: port, model: nil, name: nil, mac: ARPCache.mac(for: host), uuid: nil)
         }
 
         return nil

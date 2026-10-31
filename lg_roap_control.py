@@ -101,6 +101,8 @@ SSDP_BCAST = ("255.255.255.255", 1990)   # B-SEARCH do spec UDAP 2.0 da LG
 USER_AGENT_UDAP = f"macOS/1.0 UDAP/2.0 lg_roap_control/{__version__}"   # SSDP e variante udap
 USER_AGENT_ROAP = f"lg_roap_control/{__version__} (macOS)"              # roap, hdcp, hdcp_wifirc
 USER_AGENT = USER_AGENT_UDAP  # usado no SSDP e na descricao UDAP (rootservice.xml)
+# Busca DLNA da redescoberta automatica: sem "UDAP/2.0", ver ssdp_search.
+USER_AGENT_DLNA = f"macOS/1.0 UPnP/1.1 lg_roap_control/{__version__}"
 
 
 def user_agent_for(protocol: str) -> str:
@@ -545,15 +547,25 @@ def _parse_ssdp(payload: str) -> Dict[str, str]:
     return headers
 
 
-def ssdp_search(timeout: float = 3.0, debug: bool = False) -> List[Dict[str, str]]:
-    """Envia M-SEARCH (varios ST) e B-SEARCH; devolve lista de respostas por IP."""
+def ssdp_search(timeout: float = 3.0, debug: bool = False, udap: bool = True) -> List[Dict[str, str]]:
+    """Envia M-SEARCH (varios ST) e B-SEARCH; devolve lista de respostas por IP.
+
+    Toda resposta da TV a uma busca UDAP poe na tela o popup de descoberta da LG ("modelo_XX",
+    celular e TV, "Pairing Key"; spec UDAP 2.0, "Host screen after discovery response"). Com
+    udap=False vai so a busca DLNA (MediaRenderer), que o renderizador DLNA da TV, outro servidor,
+    responde. E a da redescoberta automatica.
+    """
     mx = max(1, min(int(timeout), 5))
-    searches = [
-        ("M-SEARCH", SSDP_MCAST, "udap:rootservice"),
-        ("M-SEARCH", SSDP_MCAST, "urn:schemas-upnp-org:device:MediaRenderer:1"),
-        ("M-SEARCH", SSDP_MCAST, "ssdp:all"),
-        ("B-SEARCH", SSDP_BCAST, "udap:rootservice"),
-    ]
+    dlna = ("M-SEARCH", SSDP_MCAST, "urn:schemas-upnp-org:device:MediaRenderer:1")
+    searches = [dlna]
+    if udap:
+        searches = [
+            ("M-SEARCH", SSDP_MCAST, "udap:rootservice"),
+            dlna,
+            ("M-SEARCH", SSDP_MCAST, "ssdp:all"),
+            ("B-SEARCH", SSDP_BCAST, "udap:rootservice"),
+        ]
+    user_agent = USER_AGENT if udap else USER_AGENT_DLNA
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -564,7 +576,7 @@ def ssdp_search(timeout: float = 3.0, debug: bool = False) -> List[Dict[str, str
     for method, dest, st in searches:
         host = f"{dest[0]}:{dest[1]}"
         msg = (f"{method} * HTTP/1.1\r\nHOST: {host}\r\nMAN: \"ssdp:discover\"\r\n"
-               f"MX: {mx}\r\nST: {st}\r\nUSER-AGENT: {USER_AGENT}\r\n\r\n")
+               f"MX: {mx}\r\nST: {st}\r\nUSER-AGENT: {user_agent}\r\n\r\n")
         try:
             sock.sendto(msg.encode(), dest)
         except OSError as e:
@@ -600,24 +612,27 @@ def ssdp_search(timeout: float = 3.0, debug: bool = False) -> List[Dict[str, str
 
 
 def identify_tv(ip: str, port: int = DEFAULT_PORT, timeout: float = 2.0,
-                debug: bool = False, location: Optional[str] = None) -> Optional[Dict[str, str]]:
-    """Confirma que o IP e uma LG NetCast e le modelo/nome. Nao precisa de pairing."""
+                debug: bool = False, location: Optional[str] = None,
+                udap: bool = True) -> Optional[Dict[str, str]]:
+    """Confirma que o IP e uma LG NetCast e le modelo/nome. Nao precisa de pairing.
+    Com udap=False nada sai com User-Agent UDAP/2.0 (sem rootservice.xml)."""
     info: Dict[str, str] = {"ip": ip, "port": str(port)}
-    hdr = {"User-Agent": USER_AGENT, "Connection": "Close"}
+    hdr = {"User-Agent": USER_AGENT if udap else USER_AGENT_DLNA, "Connection": "Close"}
     # 1) Descricao UDAP (rootservice.xml). Em NetCast 3.0/4.0 costuma existir.
-    try:
-        r = http_request("GET", f"http://{ip}:{port}/udap/api/data?target=rootservice.xml",
-                         None, hdr, timeout, debug)
-        if r.status == 200 and "<" in r.text:
-            for tag in ("modelName", "friendlyName", "manufacturer", "uuid", "deviceType"):
-                v = _xml_find_text(r.text, tag)
-                if v:
-                    info[tag] = v
-            if info.get("manufacturer", "LG").lower().startswith("lg") or "modelName" in info:
-                info["via"] = "udap-description"
-                return info
-    except TVConnectionError:
-        return None  # porta 8080 fechada: nao e uma NetCast ligada
+    if udap:
+        try:
+            r = http_request("GET", f"http://{ip}:{port}/udap/api/data?target=rootservice.xml",
+                             None, hdr, timeout, debug)
+            if r.status == 200 and "<" in r.text:
+                for tag in ("modelName", "friendlyName", "manufacturer", "uuid", "deviceType"):
+                    v = _xml_find_text(r.text, tag)
+                    if v:
+                        info[tag] = v
+                if info.get("manufacturer", "LG").lower().startswith("lg") or "modelName" in info:
+                    info["via"] = "udap-description"
+                    return info
+        except TVConnectionError:
+            return None  # porta 8080 fechada: nao e uma NetCast ligada
     # 2) Descricao UPnP apontada pelo LOCATION do SSDP.
     if location:
         try:
@@ -635,6 +650,8 @@ def identify_tv(ip: str, port: int = DEFAULT_PORT, timeout: float = 2.0,
             pass
     # 3) Ultimo recurso: algum caminho ROAP/HDCP/UDAP existe na porta 8080?
     for proto in PROTOCOL_ORDER:
+        if proto == "udap" and not udap:
+            continue
         try:
             r = http_request("GET", f"http://{ip}:{port}{PROTOCOLS[proto]['data']}?target=volume_info",
                              None, {"User-Agent": user_agent_for(proto), "Connection": "Close"},
@@ -681,11 +698,12 @@ def scan_subnet(timeout: float = 0.4, port: int = DEFAULT_PORT, cidr: Optional[s
 
 
 def discover(timeout: float = 3.0, scan: bool = False, cidr: Optional[str] = None,
-             port: int = DEFAULT_PORT, debug: bool = False) -> List[Dict[str, str]]:
-    """SSDP primeiro; se pedido (ou nada encontrado), varre a sub-rede."""
+             port: int = DEFAULT_PORT, debug: bool = False, udap: bool = True) -> List[Dict[str, str]]:
+    """SSDP primeiro; se pedido (ou nada encontrado), varre a sub-rede.
+    udap=False: sem busca nem descricao UDAP, que poem o popup de descoberta na TV."""
     candidates: Dict[str, Optional[str]] = {}
     try:
-        for entry in ssdp_search(timeout, debug):
+        for entry in ssdp_search(timeout, debug, udap):
             candidates.setdefault(entry["ip"], entry.get("LOCATION"))
     except OSError as e:
         print(f"[aviso] SSDP falhou ({e}). No macOS 15+, confira Ajustes > Privacidade e "
@@ -698,7 +716,7 @@ def discover(timeout: float = 3.0, scan: bool = False, cidr: Optional[str] = Non
             print(f"[aviso] varredura: {e}", file=sys.stderr)
     tvs: List[Dict[str, str]] = []
     with ThreadPoolExecutor(max_workers=16) as ex:
-        futs = {ip: ex.submit(identify_tv, ip, port, 2.0, debug, loc) for ip, loc in candidates.items()}
+        futs = {ip: ex.submit(identify_tv, ip, port, 2.0, debug, loc, udap) for ip, loc in candidates.items()}
         for ip, fut in futs.items():
             try:
                 info = fut.result()
@@ -773,7 +791,11 @@ def persist_tv(tv: LGNetCastTV, cfg: dict, extra: Optional[dict] = None) -> None
 
 
 def auto_locate_tv(cfg: dict, timeout: float = 2.0, debug: bool = False) -> Optional[dict]:
-    """Tenta localizar a TV LG NetCast caso o IP tenha mudado via DHCP."""
+    """Tenta localizar a TV LG NetCast caso o IP tenha mudado via DHCP.
+
+    Roda sozinho a cada comando que falha, entao nao usa UDAP (udap=False): cada resposta a uma
+    busca UDAP poe o popup "Pairing Key" na tela de quem esta assistindo.
+    """
     mac = cfg.get("mac")
     port = int(cfg.get("port", DEFAULT_PORT))
     if mac:
@@ -786,14 +808,14 @@ def auto_locate_tv(cfg: dict, timeout: float = 2.0, debug: bool = False) -> Opti
                     cand_ip, cand_mac = m.group(1), m.group(2)
                     cand_mac = ":".join(p.zfill(2) for p in cand_mac.split(":")).lower()
                     if cand_mac == target_mac:
-                        info = identify_tv(cand_ip, port, timeout=1.0, debug=debug)
+                        info = identify_tv(cand_ip, port, timeout=1.0, debug=debug, udap=False)
                         if info:
                             return info
         except Exception:
             pass
 
     try:
-        tvs = discover(timeout=timeout, scan=False, port=port, debug=debug)
+        tvs = discover(timeout=timeout, scan=False, port=port, debug=debug, udap=False)
         if mac:
             for t in tvs:
                 t_mac = mac_from_arp(t["ip"])

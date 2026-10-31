@@ -136,6 +136,7 @@ final class LGTVClient: ObservableObject {
     private var pollTimer: Timer?
     private var lastSendTime: DispatchTime = .now()
     private let minGapSeconds: Double = 0.30
+    private var lastAutomaticSearch: Date = .distantPast
     
     static var configURL: URL {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -314,8 +315,15 @@ final class LGTVClient: ObservableObject {
     }
 
     /// Checks if the TV has moved to another IP address (DHCP) and updates configuration.
-    func relocateTVIfNeeded() async -> Bool {
-        guard let newHost = await LGTVDiscovery.locate(matching: config) else { return false }
+    /// Every failed request asks for this, and this TV often stalls for many seconds, so the automatic
+    /// searches run at most every 30 s. `askedByUser` (Settings) skips that wait and may use the UDAP
+    /// search, whose popup on the TV is expected there.
+    func relocateTVIfNeeded(askedByUser: Bool = false) async -> Bool {
+        if !askedByUser {
+            guard Date().timeIntervalSince(lastAutomaticSearch) >= 30 else { return false }
+            lastAutomaticSearch = Date()
+        }
+        guard let newHost = await LGTVDiscovery.locate(matching: config, allowUDAP: askedByUser) else { return false }
         if newHost != config.host {
             NSLog("LG TV migrou de IP: %@ -> %@", config.host, newHost)
             self.config.host = newHost
