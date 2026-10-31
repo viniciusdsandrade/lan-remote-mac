@@ -403,6 +403,14 @@ criado com permissão `0600`. Conteúdo típico:
   TV, campo vazio): é a TV respondendo a uma busca UDAP (`udap:rootservice`), como manda o spec.
   Até 30/10/2026 a redescoberta automática fazia essa busca a cada requisição que falhava, e o
   pop-up voltava várias vezes por minuto. Hoje ela usa só a busca DLNA; veja PROTOCOLO.md.
+- **Falhas momentâneas de HTTP ou conflito de IP na rede**: em standby a TV desliga a interface de
+  rede e para de responder ao ping; já durante oscilações de Wi-Fi, na subida do sistema (~1 min em
+  que o ping responde e a porta 8080 ainda recusa conexões) ou num conflito de IP na LAN (outro
+  aparelho respondendo ARP no mesmo IP da TV enquanto descarta conexões na porta 8080; veja
+  PROTOCOLO.md), uma falha HTTP não significa TV desligada. O app procura antes se a TV migrou de IP
+  no DHCP e só mostra "Desligada" quando nem o ping da TV responde; caso contrário exibe "Ligada ·
+  sem resposta" (ou "Ligada · conflito de IP") e enfileira teclas recentes por até 15 s, na ordem,
+  para enviá-las assim que a porta voltar a responder.
 - **Teclas iguais em rajada são descartadas**: três `vol+` enviados sem intervalo (cliques em
   paralelo) viraram um só na TV; a cada 0,3 s os três registram (10 para 13). Por isso o
   `send` usa 0,3 s entre teclas por padrão e o `remote` espaça os envios sozinho.

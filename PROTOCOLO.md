@@ -269,6 +269,16 @@ curl -s -X POST -H "Content-Type: application/atom+xml" --data '<?xml version="1
 7. **IP dinâmico.** Se o DHCP trocar o IP da TV, rode `discover` de novo ou fixe o IP no
    roteador.
 8. **Sem Bluetooth, sem IR.** Tudo depende da rede; se o roteador cair, o controle cai junto.
+10. **Ping, inicialização e conflito de IP na LAN.** Em standby a TV desliga a interface de rede
+    (o Mac recebe "host is down" e o ping não responde). Ao ligar, o Wi-Fi sobe antes do servidor
+    ROAP: a TV já responde ao ping enquanto a porta 8080 recusa conexões ("connection refused") por
+    cerca de 1 minuto até o serviço subir; depois disso responde em 5 a 30 ms sem interrupções. Se
+    outro aparelho da rede usar o mesmo IP da TV (conflito de IP, por exemplo um ponto de acesso com
+    IP fixo dentro da faixa do DHCP), o cache ARP do Mac alterna entre os dois MACs: enquanto aponta
+    para o outro aparelho, o ping continua respondendo, mas os `SYN` TCP nas portas 8080 e 1387
+    expiram sem resposta. Por isso o app só dá a TV como desligada quando não a encontra em outro IP
+    nem recebe resposta ao ping da própria TV, e sinaliza conflito de IP quando outro MAC assume o
+    endereço logo após a TV ter respondido.
 
 ## Isto ainda é usável em 2026?
 

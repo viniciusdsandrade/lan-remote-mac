@@ -43,8 +43,26 @@ enum LGTVDiscovery {
         }
     }
 
-    /// Where the LG TV matching `config` answers without a search: the configured IP, then the IP the
-    /// ARP cache has for its MAC. Two quick probes.
+    /// Whether `host` answers ICMP ping within a second. In standby the NetCast TV shuts its network
+    /// interface down, so a ping reply tells an awake TV whose HTTP port timed out apart from standby.
+    static func answersPing(_ host: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/sbin/ping")
+            process.arguments = ["-c", "1", "-t", "1", "-q", host]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            process.terminationHandler = { continuation.resume(returning: $0.terminationStatus == 0) }
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(returning: false)
+            }
+        }
+    }
+
+    /// Where the LG TV matching `config` answers without a search: the configured IP, then any other
+    /// IP the ARP cache has for its MAC.
     static func probeKnownHosts(of config: TVConfig) async -> String? {
         let port = config.port > 0 ? config.port : defaultPort
 
@@ -53,10 +71,13 @@ enum LGTVDiscovery {
             return config.host
         }
 
-        // 2. Fast check: ARP cache by MAC (instantaneous, 0 network overhead)
-        if let mac = config.mac, let arpIP = ARPCache.ip(for: mac), !arpIP.isEmpty {
-            if await probeHost(arpIP, port: port) {
-                return arpIP
+        // 2. Fast check: ARP cache by MAC (instantaneous, skips the host that just failed above)
+        if let mac = config.mac {
+            let arpIPs = await Task.detached { ARPCache.ips(for: mac) }.value
+            for arpIP in arpIPs where !arpIP.isEmpty && arpIP != config.host {
+                if await probeHost(arpIP, port: port) {
+                    return arpIP
+                }
             }
         }
         return nil
@@ -160,7 +181,7 @@ enum LGTVDiscovery {
             let ip = String(cString: text)
 
             let replyStr = String(data: Data(buffer[0..<Int(count)]), encoding: .utf8) ?? ""
-            if replyStr.contains("UDAP") || replyStr.contains("47LN5700") || replyStr.contains("rootservice") || replyStr.contains("LG Electronics") {
+            if replyStr.contains("UDAP") || replyStr.contains("LN5700") || replyStr.contains("rootservice") || replyStr.contains("LG Electronics") {
                 foundIPs.insert(ip)
             } else if replyStr.contains("HTTP/1.1 200") && (replyStr.contains("udap:rootservice") || replyStr.contains("MediaRenderer")) {
                 foundIPs.insert(ip)

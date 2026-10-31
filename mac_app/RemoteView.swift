@@ -100,6 +100,7 @@ struct RemoteView: View {
                     Text(statusText)
                         .font(.system(size: 10, weight: .semibold, design: .rounded))
                         .foregroundColor(statusColor)
+                        .help(statusHelp)
                 }
 
                 Spacer()
@@ -178,16 +179,28 @@ struct RemoteView: View {
 
     private var statusText: String {
         switch client.powerState {
-        case .on: return "Ligada"
+        case .on:
+            if client.ipConflict { return "Ligada · conflito de IP" }
+            return client.notAnswering ? "Ligada · sem resposta" : "Ligada"
         case .off: return "Desligada"
         case .turningOn: return "Ligando…"
         case .unknown: return "Verificando…"
         }
     }
 
+    private var statusHelp: String {
+        guard client.powerState == .on, client.notAnswering else { return "" }
+        if client.ipConflict {
+            return "Outro aparelho na rede respondeu no mesmo IP da TV (conflito de IP). "
+                + "Fixe um IP para a TV no roteador ou use Buscar TV na rede em Configurações."
+        }
+        return "A TV respondeu ao ping, mas a porta 8080 não aceitou conexão agora. "
+            + "Os botões apertados aguardam até 15 s para sair na ordem."
+    }
+
     private var statusColor: Color {
         switch client.powerState {
-        case .on: return Color.green
+        case .on: return client.notAnswering ? Color.orange : Color.green
         case .off: return Color(red: 0.95, green: 0.35, blue: 0.3)
         case .turningOn: return Color(red: 0.4, green: 0.7, blue: 1.0)
         case .unknown: return Color(white: 0.55)
