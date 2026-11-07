@@ -31,7 +31,7 @@ enum PlayStationError: LocalizedError {
         switch self {
         case .network(let why): return "Não consegui falar com o PS5 (\(why))."
         case .notFound:
-            return "O PS5 não respondeu na rede. Ele está na tomada e com 'Permanecer conectado à internet' no modo de repouso?"
+            return "O PS5 não respondeu na rede (desligado por completo ou fora da rede; ele só acorda pela rede em modo de repouso, com luz laranja e 'Permanecer conectado à internet' ativo)."
         case .timeout: return "O PS5 não acordou a tempo."
         case .alreadyAwake: return "O PS5 já estava ligado; ele só tenta ligar a TV quando sai do repouso."
         case .notRegistered: return "O app ainda não está registrado no PS5."
@@ -102,9 +102,11 @@ enum UDPExchange {
         let data: Data
     }
 
-    /// Sends `payload` to every target and collects what comes back within `window` seconds; `stop`
+    /// Sends `payload` to every target (re-sending every `resendEvery` seconds when set, with optional
+    /// micro-pacing for subnet sweeps) and collects what comes back within `window` seconds; `stop`
     /// ends the wait early. Blocking: call it off the main thread.
     static func run(_ payload: Data, to targets: [String], port: UInt16, window: TimeInterval,
+                    resendEvery: TimeInterval? = nil, pacingEvery: Int = 0, pacingDelayUs: useconds_t = 0,
                     until stop: ((Reply) -> Bool)? = nil) throws -> [Reply] {
         let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
         guard fd >= 0 else { throw PlayStationError.network("sem socket UDP") }
@@ -112,33 +114,53 @@ enum UDPExchange {
         var yes: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &yes, socklen_t(MemoryLayout<Int32>.size))
 
-        var sent = 0
-        for target in targets {
-            var destination = sockaddr_in()
-            destination.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-            destination.sin_family = sa_family_t(AF_INET)
-            destination.sin_port = port.bigEndian
-            guard inet_pton(AF_INET, target, &destination.sin_addr) == 1 else { continue }
-            let result = payload.withUnsafeBytes { bytes in
-                withUnsafePointer(to: &destination) { pointer in
-                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                        sendto(fd, bytes.baseAddress, bytes.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        func transmitBatch() -> Int {
+            var batchSent = 0
+            for (index, target) in targets.enumerated() {
+                var destination = sockaddr_in()
+                destination.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+                destination.sin_family = sa_family_t(AF_INET)
+                destination.sin_port = port.bigEndian
+                guard inet_pton(AF_INET, target, &destination.sin_addr) == 1 else { continue }
+                let result = payload.withUnsafeBytes { bytes in
+                    withUnsafePointer(to: &destination) { pointer in
+                        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                            sendto(fd, bytes.baseAddress, bytes.count, 0, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+                        }
                     }
                 }
+                if result >= 0 { batchSent += 1 }
+                if pacingEvery > 0, pacingDelayUs > 0, (index + 1) % pacingEvery == 0 {
+                    usleep(pacingDelayUs)
+                }
             }
-            if result >= 0 { sent += 1 }
+            return batchSent
         }
-        guard sent > 0 else { throw PlayStationError.network(String(cString: strerror(errno))) }
+
+        guard transmitBatch() > 0 else { throw PlayStationError.network(String(cString: strerror(errno))) }
 
         var replies: [Reply] = []
         var buffer = [UInt8](repeating: 0, count: 2048)
         let deadline = Date().addingTimeInterval(window)
+        var nextResend = resendEvery.map { Date().addingTimeInterval($0) }
         while true {
+            let now = Date()
+            if let due = nextResend, now >= due, now < deadline, let interval = resendEvery {
+                _ = transmitBatch()
+                nextResend = Date().addingTimeInterval(interval)
+            }
             let remaining = deadline.timeIntervalSinceNow
             guard remaining > 0 else { break }
+            let slice: TimeInterval
+            if let due = nextResend {
+                slice = max(0.01, min(remaining, due.timeIntervalSinceNow))
+            } else {
+                slice = remaining
+            }
             var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-            let ready = poll(&descriptor, 1, Int32(remaining * 1000))
+            let ready = poll(&descriptor, 1, Int32(slice * 1000))
             if ready < 0 && errno == EINTR { continue }
+            if ready == 0 { continue }
             guard ready > 0 else { break }
             var sender = sockaddr_in()
             var length = socklen_t(MemoryLayout<sockaddr_in>.size)
@@ -187,16 +209,27 @@ enum PlayStationDiscovery {
     static let port: UInt16 = 9302
     static let protocolVersion = "00030010"   // PS5
 
+    /// True for a routable LAN IPv4 address (filters out 0.0.0.0 replies right after wake).
+    static func isUsableHost(_ address: String) -> Bool {
+        var parsed = in_addr()
+        guard inet_pton(AF_INET, address, &parsed) == 1 else { return false }
+        return address != "0.0.0.0" && address != "255.255.255.255" && !address.hasPrefix("169.254.")
+    }
+
     /// Consoles answering a search: on the whole network, or only at `host`.
     static func search(host: String? = nil, timeout: TimeInterval = 2.5) async -> [DiscoveredPlayStation] {
         let request = Data("SRCH * HTTP/1.1\ndevice-discovery-protocol-version:\(protocolVersion)\n".utf8)
         let targets = host.map { [$0] } ?? broadcastAddresses()
         let replies = await Task.detached(priority: .userInitiated) {
-            (try? UDPExchange.run(request, to: targets, port: port, window: timeout,
-                                  until: host == nil ? nil : { _ in true })) ?? []
+            (try? UDPExchange.run(request, to: targets, port: port, window: timeout, resendEvery: 0.45,
+                                  until: host == nil ? nil : { isUsableHost($0.host) })) ?? []
         }.value
+        return parseReplies(replies)
+    }
+
+    private static func parseReplies(_ replies: [UDPExchange.Reply]) -> [DiscoveredPlayStation] {
         var found: [DiscoveredPlayStation] = []
-        for reply in replies {
+        for reply in replies where isUsableHost(reply.host) {
             guard let message = DDPMessage(reply.data), let hostId = message.fields["host-id"],
                   !found.contains(where: { $0.console.hostId == hostId }) else { continue }
             let console = PlayStationConsole(name: message.fields["host-name"] ?? "PS5", host: reply.host, hostId: hostId,
@@ -206,22 +239,47 @@ enum PlayStationDiscovery {
         return found
     }
 
-    /// Where `console` is now: at its last address, or wherever it answers the broadcast (DHCP).
+    /// Where `console` is now: at its last address, via broadcast (DHCP), or via a paced unicast
+    /// sweep of the local /24 when Wi-Fi bands or repeaters drop UDP broadcast frames.
     static func locate(_ console: PlayStationConsole) async -> DiscoveredPlayStation? {
         if let seen = await search(host: console.host, timeout: 1.5).first(where: { $0.console.hostId == console.hostId }) {
             return seen
         }
-        return await search().first(where: { $0.console.hostId == console.hostId })
+        if Task.isCancelled { return nil }
+        if let seen = await search(timeout: 2.0).first(where: { $0.console.hostId == console.hostId }) {
+            return seen
+        }
+        if Task.isCancelled { return nil }
+        return await searchLocalSubnet(matching: console.hostId).first(where: { $0.console.hostId == console.hostId })
     }
 
-    /// Wakes the console from rest mode and waits until it reports itself awake. Returns the
-    /// console with its current address.
+    static func searchLocalSubnet(matching targetHostId: String? = nil) async -> [DiscoveredPlayStation] {
+        let hosts = localSubnetHosts()
+        guard !hosts.isEmpty else { return [] }
+        let request = Data("SRCH * HTTP/1.1\ndevice-discovery-protocol-version:\(protocolVersion)\n".utf8)
+        let stopEarly: ((UDPExchange.Reply) -> Bool)? = targetHostId.map { wanted in
+            { reply in
+                guard isUsableHost(reply.host), let msg = DDPMessage(reply.data) else { return false }
+                return msg.fields["host-id"] == wanted
+            }
+        }
+        let replies = await Task.detached(priority: .userInitiated) {
+            (try? UDPExchange.run(request, to: hosts, port: port, window: 1.2,
+                                  pacingEvery: 8, pacingDelayUs: 20_000,
+                                  until: stopEarly)) ?? []
+        }.value
+        return parseReplies(replies)
+    }
+
+    /// Wakes the console from rest mode and waits until it reports itself awake (or returns right away
+    /// with its current DHCP address when it is already awake).
     static func wake(_ console: PlayStationConsole, timeout: TimeInterval = 30) async throws -> PlayStationConsole {
         guard console.registered, let credential = console.credential else { throw PlayStationError.notRegistered }
         guard let seen = await locate(console) else { throw PlayStationError.notFound }
-        if seen.awake { throw PlayStationError.alreadyAwake }
         var current = console
         current.host = seen.console.host
+        if let version = seen.console.systemVersion { current.systemVersion = version }
+        if seen.awake { return current }
 
         let message = Data(("WAKEUP * HTTP/1.1\nclient-type:vr\nauth-type:R\nmodel:w\napp-type:r\n"
                             + "user-credential:\(credential)\ndevice-discovery-protocol-version:\(protocolVersion)\n").utf8)
@@ -229,14 +287,20 @@ enum PlayStationDiscovery {
         let deadline = Date().addingTimeInterval(timeout)
         var lastSent = Date.distantPast
         while Date() < deadline {
+            try Task.checkCancellation()
             if Date().timeIntervalSince(lastSent) >= 5 {   // the console doesn't answer the WAKEUP itself
                 try await Task.detached(priority: .userInitiated) {
                     _ = try UDPExchange.run(message, to: [host], port: port, window: 0)
                 }.value
                 lastSent = Date()
             }
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            if await search(host: host, timeout: 1.5).first?.awake == true { return current }
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            if let probe = await search(host: host, timeout: 1.5).first(where: { $0.console.hostId == console.hostId }),
+               probe.awake {
+                current.host = probe.console.host
+                if let version = probe.console.systemVersion { current.systemVersion = version }
+                return current
+            }
         }
         throw PlayStationError.timeout
     }
@@ -258,6 +322,33 @@ enum PlayStationDiscovery {
             if !address.hasPrefix("169.254."), !addresses.contains(address) { addresses.append(address) }
         }
         return addresses
+    }
+
+    private static func localSubnetHosts() -> [String] {
+        var interfaces: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&interfaces) == 0, let first = interfaces else { return [] }
+        defer { freeifaddrs(interfaces) }
+        let required = Int32(IFF_UP | IFF_RUNNING | IFF_BROADCAST)
+        var hosts: [String] = []
+        for pointer in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let entry = pointer.pointee
+            let flags = Int32(entry.ifa_flags)
+            guard flags & required == required, flags & Int32(IFF_LOOPBACK) == 0,
+                  let addrPtr = entry.ifa_addr, addrPtr.pointee.sa_family == sa_family_t(AF_INET),
+                  let maskPtr = entry.ifa_netmask else { continue }
+            let own = addrPtr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { UInt32(bigEndian: $0.pointee.sin_addr.s_addr) }
+            var mask = maskPtr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { UInt32(bigEndian: $0.pointee.sin_addr.s_addr) }
+            if own >> 16 == 0xA9FE { continue }
+            if mask < 0xFFFF_FF00 { mask = 0xFFFF_FF00 }   // cap at /24
+            let network = own & mask
+            let broadcast = network | ~mask
+            guard broadcast > network + 1 else { continue }
+            for candidate in (network + 1)..<broadcast where candidate != own {
+                let ip = "\(candidate >> 24).\((candidate >> 16) & 255).\((candidate >> 8) & 255).\(candidate & 255)"
+                if !hosts.contains(ip) { hosts.append(ip) }
+            }
+        }
+        return hosts
     }
 }
 

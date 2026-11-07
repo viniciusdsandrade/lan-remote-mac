@@ -15,7 +15,11 @@ extension LGTVClient {
     func searchConsoles() {
         consolePairingStage = .searching
         Task {
-            discoveredConsoles = await PlayStationDiscovery.search()
+            var found = await PlayStationDiscovery.search()
+            if found.isEmpty {
+                found = await PlayStationDiscovery.searchLocalSubnet()
+            }
+            discoveredConsoles = found
             consolePairingStage = .idle
         }
     }
