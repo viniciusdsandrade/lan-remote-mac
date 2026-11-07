@@ -147,6 +147,21 @@ final class LGTVClient: ObservableObject {
     var keyPatience: TimeInterval = 15
     var pingProbe: @Sendable (String) async -> Bool = { await LGTVDiscovery.answersPing($0) }
     var arpLookup: @Sendable (String) -> String? = { ARPCache.mac(for: $0) }
+    var turnOnTask: Task<Void, Never>?
+    var turnOnGeneration: UInt64 = 0
+    var reloginTask: Task<Void, Never>?
+    var turnOnPollInterval: TimeInterval = 1.5
+    var turnOnTimeoutOverride: TimeInterval?
+    var boxWaker: ((LGTVClient, AndroidTVBox) async throws -> Void)?
+    var consoleWaker: @Sendable (PlayStationConsole) async throws -> PlayStationConsole = {
+        try await PlayStationDiscovery.wake($0)
+    }
+    var consoleRestarter: @Sendable (PlayStationConsole, @escaping @Sendable () async -> Bool, @escaping @MainActor (String) -> Void) async throws -> Bool = { console, shouldAbort, progress in
+        try await PlayStationRestart.run(console, shouldAbort: shouldAbort, progress: progress)
+    }
+    var consoleRelogin: @Sendable (PlayStationConsole) async -> PlayStationConsole? = {
+        await PlayStationRestart.reloginAfterBoot($0)
+    }
     private var poweredOffAt: Date?
     private var lastAnsweredAt: Date?
     private let ipConflictWindow: TimeInterval = 120
@@ -306,14 +321,16 @@ final class LGTVClient: ObservableObject {
                 if httpResp.statusCode == 200 {
                     // The power key only switches the TV off: its network goes down right after.
                     if code == TVKey.power.rawValue {
+                        turnOnTask?.cancel()
+                        turnOnTask = nil
                         notAnswering = false
                         ipConflict = false
                         self.powerState = .off
+                        self.powerOnStep = ""
                         poweredOffAt = Date()
                         lastAnsweredAt = nil
                     } else {
-                        markAnswering()
-                        self.powerState = .on
+                        markPoweredOn()
                     }
 
                     // Trigger status refresh shortly after volume/channel commands
@@ -416,6 +433,15 @@ final class LGTVClient: ObservableObject {
         lastAnsweredAt = Date()
     }
 
+    func markPoweredOn() {
+        markAnswering()
+        self.powerState = .on
+        self.powerOnStep = ""
+        self.powerOnError = nil
+        turnOnTask?.cancel()
+        turnOnTask = nil
+    }
+
     /// No answer from the TV, not even to ping: standby (unless we are switching it on).
     private func markUnreachable() {
         notAnswering = false
@@ -504,9 +530,7 @@ final class LGTVClient: ObservableObject {
             let (data, resp) = try await URLSession.shared.data(for: volReq)
             if let httpResp = resp as? HTTPURLResponse {
                 if httpResp.statusCode == 200 {
-                    markAnswering()
-                    self.powerState = .on
-                    self.powerOnError = nil
+                    markPoweredOn()
                     if config.mac == nil {
                         let host = config.host
                         let lookup = arpLookup
@@ -533,8 +557,7 @@ final class LGTVClient: ObservableObject {
                         if let (vData, vResp) = try? await URLSession.shared.data(for: retryReq),
                            (vResp as? HTTPURLResponse)?.statusCode == 200,
                            let str = String(data: vData, encoding: .utf8) {
-                            self.powerState = .on
-                            self.powerOnError = nil
+                            markPoweredOn()
                             if let muteVal = Self.extractXMLTag(from: str, tag: "mute") {
                                 self.isMuted = (muteVal.lowercased() == "true")
                             }
@@ -654,8 +677,7 @@ final class LGTVClient: ObservableObject {
                         self.config.mac = mac
                     }
                     self.saveConfigToDisk()
-                    self.powerState = .on
-                    self.powerOnError = nil
+                    markPoweredOn()
                     if !isRefreshing {
                         await self.refreshStatus()
                     }

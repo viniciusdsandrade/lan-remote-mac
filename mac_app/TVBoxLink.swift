@@ -153,23 +153,68 @@ extension LGTVClient {
 
     func turnOn() {
         guard powerState != .turningOn, canTurnOnTV else { return }
-        Task { await performTurnOn() }
+        turnOnTask?.cancel()
+        reloginTask?.cancel()
+        reloginTask = nil
+        powerState = .turningOn
+        powerOnError = nil
+        turnOnGeneration &+= 1
+        let generation = turnOnGeneration
+        turnOnTask = Task { [weak self] in
+            await self?.performTurnOn(generation: generation)
+        }
+    }
+
+    private func finishTurnOnIfAlreadyAwake() async -> Bool {
+        if powerState == .on {
+            powerOnStep = ""
+            powerOnError = nil
+            return true
+        }
+        if Task.isCancelled {
+            return true
+        }
+        if await LGTVDiscovery.probeKnownHosts(of: config) != nil {
+            while isRefreshing, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            if powerState != .on, !Task.isCancelled {
+                await refreshStatus()
+            }
+            if powerState == .on {
+                powerOnStep = ""
+                powerOnError = nil
+                return true
+            }
+        }
+        return powerState == .on || Task.isCancelled
     }
 
     /// The TV Box first; the PS5 when the box doesn't wake (it drops off the Wi-Fi after hours in
     /// standby, and then the Wake-on-LAN never reaches it).
-    private func performTurnOn() async {
-        powerState = .turningOn
-        powerOnError = nil
+    private func performTurnOn(generation: UInt64) async {
+        defer {
+            if turnOnGeneration == generation {
+                turnOnTask = nil
+            }
+        }
+        if await finishTurnOnIfAlreadyAwake() { return }
+
         var problems: [String] = []
         var helper: String?
-        var restartConsole = false
+        var activeConsole: PlayStationConsole?
 
         if let box, box.paired {
             powerOnStep = "Acordando a \(box.name) pelo Wi-Fi…"
             do {
-                try await wakeBox(box)
+                if let customWaker = boxWaker {
+                    try await customWaker(self, box)
+                } else {
+                    try await wakeBox(box)
+                }
                 helper = box.name
+            } catch is CancellationError {
+                return
             } catch AndroidTVError.notPaired {
                 self.box?.paired = false
                 self.box?.save()
@@ -177,24 +222,31 @@ extension LGTVClient {
             } catch {
                 problems.append(error.localizedDescription)
             }
+            if await finishTurnOnIfAlreadyAwake() { return }
         }
         if helper == nil, let console, console.registered {
             powerOnStep = problems.isEmpty ? "Acordando o \(console.name) pela rede…"
                                            : "A TV Box não acordou. Acordando o \(console.name) pela rede…"
+            let waker = consoleWaker
             do {
-                let awake = try await PlayStationDiscovery.wake(console)
-                if awake != console {   // moved to another address (DHCP)
+                let awake = try await waker(console)
+                if awake != console {   // moved to another address (DHCP) or updated systemVersion
                     self.console = awake
                     awake.save()
                 }
-                helper = console.name
-                restartConsole = true
+                helper = awake.name
+                activeConsole = awake
+            } catch is CancellationError {
+                return
             } catch PlayStationError.alreadyAwake {
-                helper = console.name   // awake with the TV off: the restart below still turns it on
-                restartConsole = true
+                let latest = self.console ?? console
+                helper = latest.name
+                activeConsole = latest
             } catch {
+                if await finishTurnOnIfAlreadyAwake() { return }
                 problems.append(error.localizedDescription)
             }
+            if await finishTurnOnIfAlreadyAwake() { return }
         }
         guard let helper else {
             var message = problems.joined(separator: " ")
@@ -205,13 +257,42 @@ extension LGTVClient {
             return
         }
 
+        let restartConsole = (activeConsole != nil)
         // Woken over the network the PS5 leaves the TV off; it sends One-Touch Play when it boots.
-        if restartConsole, let console {
+        if let consoleToRestart = activeConsole {
             powerOnStep = "O \(helper) acordou, mas assim ele não liga a TV. Reiniciando o \(helper) pelo Uso remoto…"
+            let restarter = consoleRestarter
+            let shouldAbort: @Sendable () async -> Bool = { [weak self] in
+                if Task.isCancelled { return true }
+                guard let client = self else { return true }
+                return await client.powerState == .on
+            }
+            let didRestart: Bool
             do {
-                try await PlayStationRestart.run(console) { [weak self] step in self?.powerOnStep = step }
+                didRestart = try await restarter(consoleToRestart, shouldAbort) { [weak self] step in
+                    guard let self, self.powerState == .turningOn else { return }
+                    self.powerOnStep = step
+                }
+            } catch is CancellationError {
+                return
             } catch {
+                if await finishTurnOnIfAlreadyAwake() { return }
                 failTurnOn(error.localizedDescription)
+                return
+            }
+            if didRestart {
+                let relogin = consoleRelogin
+                reloginTask = Task { [weak self] in
+                    guard let updated = await relogin(consoleToRestart), !Task.isCancelled else { return }
+                    guard let client = self else { return }
+                    if client.console?.hostId == updated.hostId, client.console != updated {
+                        client.console = updated
+                        updated.save()
+                    }
+                }
+            }
+            if !didRestart || powerState == .on || Task.isCancelled {
+                _ = await finishTurnOnIfAlreadyAwake()
                 return
             }
         }
@@ -219,15 +300,26 @@ extension LGTVClient {
         // The picture comes back in seconds; the NetCast network takes almost a minute more (and a
         // restarting PS5 needs about 30 s before it turns the TV on).
         powerOnStep = "\(helper) está ligando a TV. O controle volta a responder em até \(restartConsole ? 3 : 1) minuto\(restartConsole ? "s" : "")…"
-        let deadline = Date().addingTimeInterval(restartConsole ? 180 : 90)
-        while Date() < deadline {
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
+        let waitDuration = turnOnTimeoutOverride ?? (restartConsole ? 180 : 90)
+        let deadline = Date().addingTimeInterval(waitDuration)
+        while Date() < deadline, !Task.isCancelled {
+            let interval = max(0.01, turnOnPollInterval)
+            try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            if Task.isCancelled || powerState == .on {
+                if powerState == .on {
+                    powerOnStep = ""
+                    powerOnError = nil
+                }
+                return
+            }
             await refreshStatus()
             if powerState == .on {
                 powerOnStep = ""
+                powerOnError = nil
                 return
             }
         }
+        if powerState == .on || Task.isCancelled { return }
         failTurnOn("\(helper) acordou, mas a TV não respondeu. Confira se o SIMPLINK está ligado na TV "
                    + "e o controle HDMI (CEC) nesse aparelho.")
     }
@@ -242,6 +334,13 @@ extension LGTVClient {
     }
 
     private func failTurnOn(_ message: String) {
+        guard powerState != .on, !Task.isCancelled else {
+            if powerState == .on {
+                powerOnStep = ""
+                powerOnError = nil
+            }
+            return
+        }
         powerState = .off
         powerOnStep = ""
         powerOnError = message
